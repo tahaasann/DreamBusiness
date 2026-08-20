@@ -1,0 +1,107 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+    --color-canvas: #fafafc;
+    --color-surface: #ffffff;
+    --color-glass-bg: rgba(255, 255, 255, 0.75);
+
+    --color-signal: #059669;
+    --color-signal-light: #10b981;
+    --color-signal-glow: rgba(16, 185, 129, 0.15);
+
+    --color-gold: #f59e0b;
+    --color-gold-glow: rgba(245, 158, 11, 0.15);
+
+    --color-text-main: #09090b;
+    --color-text-muted: #3f3f46;
+
+    --font-display: "Chillax", system-ui, sans-serif;
+    --font-body: "Inter", system-ui, sans-serif;
+    --font-mono: "JetBrains Mono", monospace;
+    --font-serif: "Instrument Serif", Georgia, serif;
+}
+
+@layer base {
+    :root {
+        --background: var(--color-canvas);
+        --foreground: var(--color-text-main);
+    }
+
+    .dark {
+        --background: #09090b;
+        --foreground: #f4f4f5;
+    }
+
+    body {
+        background-color: var(--background);
+        color: var(--foreground);
+        font-family: var(--font-body);
+        -webkit-font-smoothing: antialiased;
+        text-rendering: optimizeLegibility;
+    }
+}
+
+@layer utilities {
+    .liquid-glass-light {
+        background: rgba(255, 255, 255, 0.8);
+        backdrop-filter: blur(20px) saturate(190%);
+        -webkit-backdrop-filter: blur(20px) saturate(190%);
+        box-shadow:
+            0 10px 30px rgba(0, 0, 0, 0.03),
+            inset 0 1px 1px rgba(255, 255, 255, 0.9),
+            0 0 0 1px rgba(0, 0, 0, 0.05);
+    }
+
+    .dark .liquid-glass-light {
+        background: rgba(19, 19, 22, 0.8);
+        border-color: rgba(255, 255, 255, 0.1);
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+    }
+
+    .liquid-glass-card {
+        background: rgba(255, 255, 255, 0.7);
+        backdrop-filter: blur(24px) saturate(180%);
+        -webkit-backdrop-filter: blur(24px) saturate(180%);
+        border: 1px solid rgba(255, 255, 255, 0.85);
+        box-shadow:
+            0 15px 35px rgba(0, 0, 0, 0.03),
+            inset 0 1px 1px rgba(255, 255, 255, 1),
+            0 0 0 1px rgba(0, 0, 0, 0.05);
+    }
+
+    .dark .liquid-glass-card {
+        background: rgba(24, 24, 27, 0.75);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        box-shadow: 0 15px 35px rgba(0, 0, 0, 0.4);
+    }
+
+    .font-display {
+        font-family: var(--font-display);
+    }
+    .font-body {
+        font-family: var(--font-body);
+    }
+    .font-mono {
+        font-family: var(--font-mono);
+    }
+    .font-serif {
+        font-family: var(--font-serif);
+    }
+
+    .animate-fade-in-up {
+        animation: fadeInUp 0.8s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    }
+
+    @keyframes fadeInUp {
+        from {
+            opacity: 0;
+            transform: translateY(20px);
+        }
+        to {
+            opacity: 1;
+            transform: translateY(0);
+        }
+    }
+}
