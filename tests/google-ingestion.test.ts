@@ -1,14 +1,14 @@
 import { describe, it, expect } from 'vitest'
-import { parseStarRating } from '@/app/actions/google-business'
+import { parseStarRating } from '@/lib/google/star-rating'
 
 describe('Must-Have 2: Google Data Ingestion Engine Suite', () => {
-    it('should correctly convert Google API star rating enums to integers 1-5', async () => {
-        expect(await parseStarRating('FIVE')).toBe(5)
-        expect(await parseStarRating('FOUR')).toBe(4)
-        expect(await parseStarRating('THREE')).toBe(3)
-        expect(await parseStarRating('TWO')).toBe(2)
-        expect(await parseStarRating('ONE')).toBe(1)
-        expect(await parseStarRating(undefined)).toBe(5)
+    it('should correctly convert Google API star rating enums to integers 1-5', () => {
+        expect(parseStarRating('FIVE')).toBe(5)
+        expect(parseStarRating('FOUR')).toBe(4)
+        expect(parseStarRating('THREE')).toBe(3)
+        expect(parseStarRating('TWO')).toBe(2)
+        expect(parseStarRating('ONE')).toBe(1)
+        expect(parseStarRating(undefined)).toBe(5)
     })
 
     it('should construct valid paginated review URL query parameters', () => {

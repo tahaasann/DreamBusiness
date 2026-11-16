@@ -11,7 +11,7 @@
   },
   "dependencies": {
     "@ai-sdk/google": "^4.0.24",
-    "@next/env": "^16.2.12",
+    "@next/env": "^16.4.6",
     "@paddle/paddle-js": "^1.6.4",
     "@supabase/ssr": "^0.12.3",
     "@supabase/supabase-js": "^2.110.9",
@@ -19,11 +19,13 @@
     "canvas-confetti": "^1.9.4",
     "clsx": "^2.1.1",
     "lucide-react": "^1.27.0",
-    "next": "16.2.12",
+    "next": "16.4.6",
     "next-intl": "^4.13.4",
     "react": "19.2.4",
     "react-dom": "19.2.4",
-    "tailwind-merge": "^3.6.0"
+    "server-only": "^0.0.1",
+    "tailwind-merge": "^3.6.0",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
@@ -32,7 +34,7 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",
-    "eslint-config-next": "16.2.12",
+    "eslint-config-next": "16.4.6",
     "tailwindcss": "^4",
     "typescript": "^5",
     "vitest": "^4.1.10"

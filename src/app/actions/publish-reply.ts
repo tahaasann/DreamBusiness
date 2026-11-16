@@ -1,14 +1,15 @@
 'use server'
 
-import { createClient } from '@/lib/supabase/server'
+import { z } from 'zod'
+import { requireUser } from '@/lib/auth/require-user'
+import { consumeRateLimit, RATE_LIMITS, rateLimitMessage } from '@/lib/rate-limit'
+import { DRAFT_TONES } from '@/lib/ai/draft-prompt'
+import { googleTokenErrorMessage, resolveGoogleAccessToken } from '@/lib/google/tokens'
 import { recordEventReplyPublished } from '@/lib/metrics-tracker'
 
 export interface PublishReplyInput {
-    googleReviewId: string
-    authorName: string
-    rating: number
-    comment?: string | null
-    businessName?: string
+    /** Database id of the review being answered. */
+    reviewId: string
     selectedTone: string
     aiGeneratedDraft: string
     finalPublishedText: string
@@ -20,129 +21,137 @@ export interface PublishReplyOutput {
     isEdited?: boolean
     error?: string
     logId?: string
+    /** 'google' when the reply is live on Google Maps, 'demo' for demo reviews. */
+    publishedTo?: 'google' | 'demo'
+    /** True when the user has to sign in with Google again. */
+    needsGoogleReconnect?: boolean
+    /** Set when Google accepted the reply but saving our own history failed. */
+    warning?: string
+}
+
+const PublishReplySchema = z.object({
+    reviewId: z.string().trim().min(1).max(100),
+    selectedTone: z.enum(DRAFT_TONES),
+    aiGeneratedDraft: z.string().max(4096),
+    finalPublishedText: z
+        .string()
+        .trim()
+        .min(1, 'Published response text cannot be empty.')
+        .max(4096, 'Reply is too long (maximum 4096 characters).'),
+    userRating: z.number().int().min(1).max(5).default(5),
+})
+
+const GOOGLE_REVIEW_PREFIX = 'accounts/'
+
+async function readGoogleError(response: Response): Promise<string> {
+    try {
+        const body = (await response.json()) as { error?: { message?: string } }
+        return body.error?.message ? `: ${body.error.message}` : ''
+    } catch {
+        return ''
+    }
 }
 
 export async function publishReplyAndLog(input: PublishReplyInput): Promise<PublishReplyOutput> {
     try {
-        const supabase = await createClient()
+        const auth = await requireUser()
+        if (!auth.ok) {
+            return { success: false, error: 'You need to sign in to publish replies.' }
+        }
+        const { supabase, user } = auth
 
-        const {
-            data: { user },
-        } = await supabase.auth.getUser()
+        const parsed = PublishReplySchema.safeParse(input)
+        if (!parsed.success) {
+            const textIssue = parsed.error.issues.find((issue) => issue.path[0] === 'finalPublishedText')
+            return { success: false, error: textIssue?.message ?? 'Invalid publish request.' }
+        }
+        const { reviewId, selectedTone, aiGeneratedDraft, finalPublishedText, userRating } = parsed.data
 
-        const {
-            data: { session },
-        } = await supabase.auth.getSession()
-
-        const {
-            googleReviewId,
-            authorName,
-            rating,
-            comment,
-            selectedTone,
-            aiGeneratedDraft,
-            finalPublishedText,
-            userRating = 5,
-        } = input
-
-        if (!finalPublishedText || finalPublishedText.trim() === '') {
-            return { success: false, error: 'Published response text cannot be empty.' }
+        const limit = await consumeRateLimit(supabase, RATE_LIMITS.publishReply)
+        if (!limit.allowed) {
+            return { success: false, error: rateLimitMessage(limit.reason) }
         }
 
-        const isEdited = aiGeneratedDraft.trim() !== finalPublishedText.trim()
+        // The review must exist and belong to one of the user's own locations.
+        const { data: review } = await supabase
+            .from('reviews')
+            .select('id, location_id, google_review_id, rating')
+            .eq('id', reviewId)
+            .maybeSingle()
+        if (!review) {
+            return { success: false, error: 'Review not found.' }
+        }
 
-        let locationId: string | null = null
+        const { data: location } = await supabase
+            .from('locations')
+            .select('id')
+            .eq('id', review.location_id)
+            .eq('user_id', user.id)
+            .maybeSingle()
+        if (!location) {
+            return { success: false, error: 'Review not found.' }
+        }
 
-        if (user) {
-            const { data: userLocations } = await supabase
-                .from('locations')
-                .select('id')
-                .eq('user_id', user.id)
-                .limit(1)
+        const isEdited = aiGeneratedDraft.trim() !== finalPublishedText
+        const isGoogleReview =
+            typeof review.google_review_id === 'string' &&
+            review.google_review_id.startsWith(GOOGLE_REVIEW_PREFIX)
 
-            if (userLocations && userLocations.length > 0) {
-                locationId = userLocations[0].id
+        // 1. Publish to Google first. If Google does not accept the reply, nothing is
+        //    marked as published and the user sees the real reason.
+        if (isGoogleReview) {
+            const {
+                data: { session },
+            } = await supabase.auth.getSession()
+            const token = await resolveGoogleAccessToken(user.id, session?.provider_token)
+            if (!token.ok) {
+                return {
+                    success: false,
+                    error: googleTokenErrorMessage(token.reason),
+                    needsGoogleReconnect:
+                        token.reason === 'not_connected' || token.reason === 'reconnect_required',
+                }
             }
-        }
 
-        if (!locationId) {
-            const { data: anyLocations } = await supabase
-                .from('locations')
-                .select('id')
-                .limit(1)
-
-            if (anyLocations && anyLocations.length > 0) {
-                locationId = anyLocations[0].id
-            }
-        }
-
-        if (!locationId) {
-            return {
-                success: false,
-                error: 'No location found. Please sync Google Maps or create a demo location first.',
-            }
-        }
-
-        if (session?.provider_token && googleReviewId.startsWith('accounts/')) {
+            let googleResponse: Response
             try {
-                const googleApiRes = await fetch(
-                    `https://mybusiness.googleapis.com/v4/${googleReviewId}/reply`,
+                googleResponse = await fetch(
+                    `https://mybusiness.googleapis.com/v4/${review.google_review_id}/reply`,
                     {
                         method: 'PUT',
                         headers: {
-                            Authorization: `Bearer ${session.provider_token}`,
+                            Authorization: `Bearer ${token.accessToken}`,
                             'Content-Type': 'application/json',
                         },
-                        body: JSON.stringify({ comment: finalPublishedText.trim() }),
+                        body: JSON.stringify({ comment: finalPublishedText }),
                     }
                 )
+            } catch (networkError: unknown) {
+                console.error('Google reply request failed:', networkError)
+                return { success: false, error: 'Could not reach Google. Nothing was published; please try again.' }
+            }
 
-                if (!googleApiRes.ok) {
-                    const gErr = await googleApiRes.json()
-                    console.warn('Google Maps API publish warning:', gErr)
+            if (!googleResponse.ok) {
+                const detail = await readGoogleError(googleResponse)
+                console.warn('Google rejected the reply:', googleResponse.status, detail)
+                return {
+                    success: false,
+                    error: `Google did not accept the reply (HTTP ${googleResponse.status}${detail}). Nothing was marked as published.`,
+                    needsGoogleReconnect: googleResponse.status === 401,
                 }
-            } catch (err: unknown) {
-                console.error('Failed to post reply directly to Google API:', err)
             }
         }
 
-        const { data: existingReviews } = await supabase
-            .from('reviews')
-            .select('id')
-            .eq('google_review_id', googleReviewId)
-            .limit(1)
+        const publishedTo = isGoogleReview ? 'google' : 'demo'
 
-        let reviewId = existingReviews?.[0]?.id
-
-        if (!reviewId) {
-            const { data: newRev, error: revInsErr } = await supabase
-                .from('reviews')
-                .insert({
-                    location_id: locationId,
-                    google_review_id: googleReviewId,
-                    author_name: authorName,
-                    rating,
-                    comment: comment || null,
-                    status: 'replied',
-                    review_created_at: new Date().toISOString(),
-                })
-                .select('id')
-                .single()
-
-            if (revInsErr) throw revInsErr
-            reviewId = newRev.id
-        } else {
-            await supabase
-                .from('reviews')
-                .update({ status: 'replied' })
-                .eq('id', reviewId)
-        }
+        // 2. Record the result in our own database.
+        const statusUpdate = await supabase.from('reviews').update({ status: 'replied' }).eq('id', review.id)
 
         const { data: logData, error: logError } = await supabase
             .from('ai_draft_logs')
             .insert({
-                review_id: reviewId,
-                prompt_used: `Tone: ${selectedTone}, Rating: ${rating}`,
+                review_id: review.id,
+                prompt_used: `Tone: ${selectedTone}, Rating: ${review.rating}`,
                 selected_tone: selectedTone,
                 ai_generated_draft: aiGeneratedDraft,
                 final_published_text: finalPublishedText,
@@ -152,23 +161,26 @@ export async function publishReplyAndLog(input: PublishReplyInput): Promise<Publ
             .select('id')
             .single()
 
-        if (logError) throw logError
+        const saveError = statusUpdate.error ?? logError
+        if (saveError) {
+            console.error('Saving reply history failed:', saveError)
+            if (!isGoogleReview) {
+                return { success: false, error: 'Failed to save the demo reply. Please try again.' }
+            }
+            // The reply is already live on Google; report success but say what is missing.
+            return {
+                success: true,
+                isEdited,
+                publishedTo,
+                warning: 'The reply is live on Google, but saving it to your history failed.',
+            }
+        }
 
-        // Trigger atomic metric event
         await recordEventReplyPublished(isEdited)
 
-        return {
-            success: true,
-            isEdited,
-            logId: logData?.id,
-        }
+        return { success: true, isEdited, logId: logData?.id, publishedTo }
     } catch (error: unknown) {
-        const errorMessage =
-            error instanceof Error ? error.message : 'Failed to publish reply and log feedback.'
         console.error('Error in publishReplyAndLog:', error)
-        return {
-            success: false,
-            error: errorMessage,
-        }
+        return { success: false, error: 'Failed to publish reply. Nothing was marked as published.' }
     }
 }

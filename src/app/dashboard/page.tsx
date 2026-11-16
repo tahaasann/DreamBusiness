@@ -1,5 +1,6 @@
 import { createClient } from "@/lib/supabase/server";
 import { redirect } from "next/navigation";
+import { checkUserEntitlement } from "@/lib/subscriptions";
 import DashboardClientView from "./dashboard-client";
 
 interface ReviewRecord {
@@ -25,6 +26,9 @@ export default async function DashboardPage() {
         redirect("/login");
     }
 
+    // Load actual entitlement state
+    const entitlement = await checkUserEntitlement(user.id);
+
     const { data: locations } = await supabase
         .from("locations")
         .select("*")
@@ -45,7 +49,10 @@ export default async function DashboardPage() {
 
     return (
         <DashboardClientView
+            userId={user.id}
             userEmail={user.email || ""}
+            isPro={entitlement.isPro}
+            subscriptionPlan={entitlement.plan}
             initialLocations={locations || []}
             initialReviews={reviews}
         />

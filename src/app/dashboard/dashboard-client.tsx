@@ -7,6 +7,7 @@ import { useTranslations } from "next-intl";
 import LanguageSwitcher from "@/components/language-switcher";
 import ThemeSwitcher from "@/components/theme-switcher";
 import { generateAiDraft } from "@/app/actions/generate-draft";
+import type { DraftLanguage, DraftTone } from "@/lib/ai/draft-prompt";
 import { publishReplyAndLog } from "@/app/actions/publish-reply";
 import {
     syncGoogleLocations,
@@ -61,13 +62,19 @@ interface ReviewItem {
 }
 
 interface DashboardClientProps {
+    userId: string;
     userEmail: string;
+    isPro: boolean;
+    subscriptionPlan: string;
     initialLocations: LocationItem[];
     initialReviews: ReviewItem[];
 }
 
 export default function DashboardClientView({
+    userId,
     userEmail,
+    isPro,
+    subscriptionPlan,
     initialLocations,
     initialReviews,
 }: DashboardClientProps) {
@@ -97,7 +104,7 @@ export default function DashboardClientView({
         initialReviews[0]?.id || null,
     );
     const [tone, setTone] = useState<string>("professional");
-    const [language, setLanguage] = useState<string>("en");
+    const [language, setLanguage] = useState<string>("en-US");
     const [aiDraft, setAiDraft] = useState<string>("");
     const [editedDraft, setEditedDraft] = useState<string>("");
     const [draftUserRating, setDraftUserRating] = useState<number>(5);
@@ -110,9 +117,14 @@ export default function DashboardClientView({
 
     useEffect(() => {
         const clientToken = process.env.NEXT_PUBLIC_PADDLE_CLIENT_TOKEN;
+        const environment =
+            process.env.NEXT_PUBLIC_PADDLE_ENVIRONMENT === "production"
+                ? "production"
+                : "sandbox";
+
         if (clientToken) {
             initializePaddle({
-                environment: "sandbox",
+                environment,
                 token: clientToken,
             }).then((paddleInstance) => {
                 if (paddleInstance) setPaddle(paddleInstance);
@@ -126,6 +138,7 @@ export default function DashboardClientView({
             paddle.Checkout.open({
                 items: [{ priceId, quantity: 1 }],
                 customer: { email: userEmail },
+                customData: { user_id: userId }, // Guarantees user_id is delivered in webhook payloads
             });
         } else {
             setStatusMessage(
@@ -181,20 +194,16 @@ export default function DashboardClientView({
         setIsCreatingDemo(false);
     };
 
-    const handleGenerateDraft = async (
-        review: ReviewItem,
-        currentBusinessName: string,
-    ) => {
+    const handleGenerateDraft = async (review: ReviewItem) => {
         setIsGenerating(true);
         setAiDraft("");
         setEditedDraft("");
 
+        // Review text and business name are read on the server from the database.
         const result = await generateAiDraft({
-            reviewComment: review.comment || "",
-            rating: review.rating,
-            businessName: currentBusinessName,
-            tone,
-            language,
+            reviewId: review.id,
+            tone: tone as DraftTone,
+            language: language as DraftLanguage,
             targetKeywords: keywords,
         });
 
@@ -207,19 +216,12 @@ export default function DashboardClientView({
         setIsGenerating(false);
     };
 
-    const handlePublish = async (
-        review: ReviewItem,
-        currentBusinessName: string,
-    ) => {
+    const handlePublish = async (review: ReviewItem) => {
         if (!editedDraft.trim()) return;
         setIsPublishing(true);
 
         const result = await publishReplyAndLog({
-            googleReviewId: review.google_review_id,
-            authorName: review.author_name,
-            rating: review.rating,
-            comment: review.comment || "",
-            businessName: currentBusinessName,
+            reviewId: review.id,
             selectedTone: tone,
             aiGeneratedDraft: aiDraft,
             finalPublishedText: editedDraft,
@@ -227,7 +229,13 @@ export default function DashboardClientView({
         });
 
         if (result.success) {
-            setStatusMessage("Reply approved & published!");
+            const baseMessage =
+                result.publishedTo === "google"
+                    ? "Reply published on Google Maps."
+                    : "Demo reply saved. Demo reviews are not sent to Google.";
+            setStatusMessage(
+                result.warning ? `${baseMessage} ${result.warning}` : baseMessage,
+            );
             setReviews((prev) =>
                 prev.map((r) =>
                     r.id === review.id ? { ...r, status: "replied" } : r,
@@ -346,11 +354,20 @@ export default function DashboardClientView({
 
                 <div className="px-4 mt-auto space-y-3">
                     <button
-                        onClick={handlePaddleCheckout}
-                        className="w-full py-2.5 bg-zinc-100 dark:bg-[#2a2a2d] border border-zinc-200 dark:border-white/10 rounded-lg text-zinc-900 dark:text-[#ffe2ab] text-xs font-semibold hover:bg-zinc-200 dark:hover:bg-[#39393c] transition-colors flex items-center justify-center gap-2 cursor-pointer shadow-xs"
+                        onClick={isPro ? undefined : handlePaddleCheckout}
+                        disabled={isPro}
+                        className={`w-full py-2.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-2 cursor-pointer shadow-xs transition-colors ${
+                            isPro
+                                ? "bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-300 dark:border-emerald-700 text-emerald-800 dark:text-emerald-300"
+                                : "bg-zinc-100 dark:bg-[#2a2a2d] border border-zinc-200 dark:border-white/10 text-zinc-900 dark:text-[#ffe2ab] hover:bg-zinc-200 dark:hover:bg-[#39393c]"
+                        }`}
                     >
-                        <Crown className="w-3.5 h-3.5 text-amber-500 dark:text-[#ffbf00]" />
-                        <span>{t("upgradePro")}</span>
+                        <Crown
+                            className={`w-3.5 h-3.5 ${isPro ? "text-emerald-600 dark:text-emerald-400" : "text-amber-500 dark:text-[#ffbf00]"}`}
+                        />
+                        <span>
+                            {isPro ? "Pro Plan Active" : t("upgradePro")}
+                        </span>
                     </button>
 
                     <div className="pt-2 border-t border-zinc-200 dark:border-white/10 space-y-2">
@@ -890,14 +907,23 @@ export default function DashboardClientView({
                                                     }
                                                     className="bg-white dark:bg-[#1f1f22] border border-zinc-200 dark:border-white/10 text-zinc-900 dark:text-white text-xs rounded-lg px-2.5 py-1.5 outline-none focus:border-emerald-500 dark:focus:border-[#ffbf00]"
                                                 >
-                                                    <option value="en">
-                                                        English
+                                                    <option value="en-US">
+                                                        English (US)
+                                                    </option>
+                                                    <option value="en-GB">
+                                                        English (UK)
                                                     </option>
                                                     <option value="es">
                                                         Spanish
                                                     </option>
                                                     <option value="de">
                                                         German
+                                                    </option>
+                                                    <option value="fr">
+                                                        French
+                                                    </option>
+                                                    <option value="it">
+                                                        Italian
                                                     </option>
                                                     <option value="pt">
                                                         Portuguese
@@ -912,7 +938,6 @@ export default function DashboardClientView({
                                                 onClick={() =>
                                                     handleGenerateDraft(
                                                         selectedReview,
-                                                        currentBusinessName,
                                                     )
                                                 }
                                                 disabled={isGenerating}
@@ -988,7 +1013,6 @@ export default function DashboardClientView({
                                                     onClick={() =>
                                                         handlePublish(
                                                             selectedReview,
-                                                            currentBusinessName,
                                                         )
                                                     }
                                                     disabled={

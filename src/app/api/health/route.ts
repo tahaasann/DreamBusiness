@@ -5,7 +5,8 @@ export async function GET() {
     const startTime = Date.now()
     try {
         const supabase = await createClient()
-        const { error } = await supabase.from('locations').select('id').limit(1)
+        // platform_metrics is readable by anonymous visitors; user tables are not.
+        const { error } = await supabase.from('platform_metrics').select('id').limit(1)
 
         if (error) throw error
 

@@ -1,7 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { createClient } from '@/lib/supabase/server'
 import { generateAiDraft } from '@/app/actions/generate-draft'
 import { publishReplyAndLog } from '@/app/actions/publish-reply'
 import { createDemoLocationForUser } from '@/app/actions/google-business'
+import { createSupabaseMock } from './helpers/supabase-mock'
 
 // Mock Vercel AI SDK for deterministic instant testing
 vi.mock('ai', async (importOriginal) => {
@@ -14,37 +16,35 @@ vi.mock('ai', async (importOriginal) => {
     }
 })
 
-// Mock Supabase Server Client to isolate server actions testing
-vi.mock('@/lib/supabase/server', () => ({
-    createClient: vi.fn().mockResolvedValue({
-        auth: {
-            getUser: vi.fn().mockResolvedValue({
-                data: { user: { id: 'test_user_uuid_12345', email: 'test@business.com' } },
-            }),
-            getSession: vi.fn().mockResolvedValue({
-                data: { session: { provider_token: 'mock_google_oauth_token' } },
-            }),
-        },
-        from: vi.fn().mockReturnValue({
-            select: vi.fn().mockReturnThis(),
-            eq: vi.fn().mockReturnThis(),
-            in: vi.fn().mockReturnThis(),
-            limit: vi.fn().mockResolvedValue({ data: [{ id: 'mock_location_uuid_67890' }] }),
-            single: vi.fn().mockResolvedValue({
-                data: { id: 'mock_id', business_name: 'Metropolitan Bistro (Kadıköy)' },
-                error: null,
-            }),
-            insert: vi.fn().mockReturnThis(),
-            upsert: vi.fn().mockReturnThis(),
-            update: vi.fn().mockReturnThis(),
-        }),
-    }),
-}))
+vi.mock('@/lib/supabase/server', () => ({ createClient: vi.fn() }))
+vi.mock('@/lib/google/tokens', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('@/lib/google/tokens')>()
+    return {
+        ...actual,
+        resolveGoogleAccessToken: vi.fn().mockResolvedValue({ ok: true, accessToken: 'mock_google_access' }),
+    }
+})
 
 describe('Proficios E2E Server Actions Test Suite', () => {
     const originalFetch = global.fetch
 
     beforeEach(() => {
+        const { client } = createSupabaseMock({
+            providerToken: 'mock_google_oauth_token',
+            tables: {
+                locations: { id: 'mock_location_uuid_67890', business_name: 'Metropolitan Bistro (Kadıköy)' },
+                reviews: {
+                    id: 'mock_review_uuid_1',
+                    location_id: 'mock_location_uuid_67890',
+                    google_review_id: 'accounts/123/locations/456/reviews/789',
+                    rating: 4,
+                    comment: 'The steak was amazing but the service was a bit slow.',
+                },
+                ai_draft_logs: { id: 'mock_log_id_123' },
+            },
+        })
+        vi.mocked(createClient).mockResolvedValue(client as never)
+
         global.fetch = vi.fn().mockImplementation((url, init) => {
             if (typeof url === 'string' && url.includes('googleapis.com')) {
                 return Promise.resolve(
@@ -67,31 +67,22 @@ describe('Proficios E2E Server Actions Test Suite', () => {
         const startTime = Date.now()
 
         const result = await generateAiDraft({
-            reviewComment: 'The steak was amazing but the service was a bit slow.',
-            rating: 4,
-            businessName: 'Metropolitan Bistro',
+            reviewId: 'mock_review_uuid_1',
             tone: 'professional',
-            language: 'en',
+            language: 'en-US',
         })
 
         const duration = Date.now() - startTime
 
         expect(result.success).toBe(true)
-        if (result.success) {
-            expect(result.draft).toBeDefined()
-            expect(typeof result.draft).toBe('string')
-        }
+        expect(typeof result.draft).toBe('string')
         expect(duration).toBeLessThan(1000)
     })
 
     // 2. Test Human-in-the-loop Reply & Feedback Engine
     it('should log published replies and detect human draft edits correctly', async () => {
         const result = await publishReplyAndLog({
-            googleReviewId: 'accounts/123/locations/456/reviews/789',
-            authorName: 'Sarah Jenkins',
-            rating: 5,
-            comment: 'Great experience!',
-            businessName: 'Metropolitan Bistro',
+            reviewId: 'mock_review_uuid_1',
             selectedTone: 'friendly',
             aiGeneratedDraft: 'Thank you for visiting us!',
             finalPublishedText: 'Thank you so much for visiting us Sarah!',
@@ -100,6 +91,7 @@ describe('Proficios E2E Server Actions Test Suite', () => {
 
         expect(result.success).toBe(true)
         expect(result.isEdited).toBe(true)
+        expect(result.publishedTo).toBe('google')
     })
 
     // 3. Test Demo Location & Review Creator Engine
@@ -108,7 +100,26 @@ describe('Proficios E2E Server Actions Test Suite', () => {
 
         expect(result.success).toBe(true)
         expect(result.location).toBeDefined()
-        expect(result.reviews).toBeDefined()
         expect(Array.isArray(result.reviews)).toBe(true)
+    })
+
+    // 4. Anonymous callers are refused by every mutating action
+    it('should refuse anonymous callers on every mutating action', async () => {
+        const { client } = createSupabaseMock({ user: null })
+        vi.mocked(createClient).mockResolvedValue(client as never)
+
+        const draft = await generateAiDraft({ reviewId: 'mock_review_uuid_1' })
+        const publish = await publishReplyAndLog({
+            reviewId: 'mock_review_uuid_1',
+            selectedTone: 'friendly',
+            aiGeneratedDraft: 'x',
+            finalPublishedText: 'y',
+        })
+        const demo = await createDemoLocationForUser()
+
+        expect(draft.success).toBe(false)
+        expect(publish.success).toBe(false)
+        expect(demo.success).toBe(false)
+        expect(client.rpc).not.toHaveBeenCalled()
     })
 })

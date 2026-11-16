@@ -2,6 +2,9 @@
 
 import { createClient } from '@/lib/supabase/server'
 import { recordEventBranchCreated } from '@/lib/metrics-tracker'
+import { consumeRateLimit, RATE_LIMITS, rateLimitMessage } from '@/lib/rate-limit'
+import { parseStarRating } from '@/lib/google/star-rating'
+import { googleTokenErrorMessage, resolveGoogleAccessToken } from '@/lib/google/tokens'
 
 // Strong Types for Google Business Profile API
 interface GoogleAccount {
@@ -53,24 +56,6 @@ interface DemoReviewInsert {
     review_created_at: string
 }
 
-// Next.js Server Action: Convert Google API Star Rating Enum to Integer (Async)
-export async function parseStarRating(starRating?: string): Promise<number> {
-    switch (starRating) {
-        case 'FIVE':
-            return 5
-        case 'FOUR':
-            return 4
-        case 'THREE':
-            return 3
-        case 'TWO':
-            return 2
-        case 'ONE':
-            return 1
-        default:
-            return 5
-    }
-}
-
 export async function syncGoogleLocations() {
     try {
         const supabase = await createClient()
@@ -86,14 +71,17 @@ export async function syncGoogleLocations() {
             return { success: false, error: 'User not authenticated' }
         }
 
-        const providerToken = session.provider_token
-
-        if (!providerToken) {
-            return {
-                success: false,
-                error: 'Google OAuth token missing. Please sign out and sign in with Google again.',
-            }
+        const limit = await consumeRateLimit(supabase, RATE_LIMITS.googleSync)
+        if (!limit.allowed) {
+            return { success: false, error: rateLimitMessage(limit.reason) }
         }
+
+        // Stored (and refreshed) Google token; the session token is only a fallback.
+        const token = await resolveGoogleAccessToken(user.id, session.provider_token)
+        if (!token.ok) {
+            return { success: false, error: googleTokenErrorMessage(token.reason) }
+        }
+        const providerToken = token.accessToken
 
         // 1. Fetch Google Business Accounts
         const resAccounts = await fetch(
@@ -174,7 +162,7 @@ export async function syncGoogleLocations() {
                             const googleReviews: GoogleReview[] = reviewsData.reviews || []
 
                             for (const rev of googleReviews) {
-                                const numericRating = await parseStarRating(rev.starRating)
+                                const numericRating = parseStarRating(rev.starRating)
 
                                 await supabase.from('reviews').upsert(
                                     {
@@ -228,6 +216,11 @@ export async function createDemoLocationForUser() {
 
         if (!user) {
             return { success: false, error: 'User not authenticated' }
+        }
+
+        const limit = await consumeRateLimit(supabase, RATE_LIMITS.demoBranch)
+        if (!limit.allowed) {
+            return { success: false, error: rateLimitMessage(limit.reason) }
         }
 
         const { count } = await supabase

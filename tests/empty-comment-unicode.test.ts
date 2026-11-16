@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { sanitizeReviewInput } from '@/lib/sanitizer'
-import { generateAiDraft } from '@/app/actions/generate-draft'
+import { buildDraftPrompt } from '@/lib/ai/draft-prompt'
 
 describe('Nice-to-Have 4: Empty Comment & Non-Latin Guardrails Suite', () => {
     // 1. Null / Empty comment handling
@@ -25,17 +25,19 @@ describe('Nice-to-Have 4: Empty Comment & Non-Latin Guardrails Suite', () => {
         expect(result.sanitizedText).not.toContain('<p>')
     })
 
-    // 3. AI Generation for Rating-Only Reviews
-    it('should generate a draft for rating-only reviews without comment text', async () => {
-        const result = await generateAiDraft({
-            reviewComment: null as unknown as string,
-            rating: 5,
+    // 3. Prompt for Rating-Only Reviews (no network call)
+    it('should build a rating-only prompt without inventing comment text', () => {
+        const result = buildDraftPrompt({
             businessName: 'Metropolitan Bistro',
-            language: 'en',
+            rating: 5,
+            comment: null,
+            tone: 'friendly',
+            language: 'en-US',
+            targetKeywords: [],
         })
 
-        expect(result.success).toBe(true)
-        expect(result.securityFlags?.isEmptyComment).toBe(true)
-        expect(result.draft).toBeDefined()
+        expect(result.securityFlags.isEmptyComment).toBe(true)
+        expect(result.prompt).toContain('Rating only (no text comment provided).')
+        expect(result.system).toContain('do not invent details')
     })
 })
