@@ -1,5 +1,6 @@
 import { getRequestConfig } from 'next-intl/server'
 import { cookies } from 'next/headers'
+import fallbackMessages from '../../messages/en-US.json'
 
 export const SUPPORTED_LOCALES = [
     'en',
@@ -15,6 +16,21 @@ export const SUPPORTED_LOCALES = [
 
 export type SupportedLocale = (typeof SUPPORTED_LOCALES)[number]
 
+type Messages = { [key: string]: string | Messages }
+
+/** Fills any key missing from a translation with the English (US) text. */
+function withFallback(base: Messages, override: Messages): Messages {
+    const merged: Messages = { ...base }
+    for (const [key, value] of Object.entries(override)) {
+        const baseValue = base[key]
+        merged[key] =
+            typeof value === 'object' && typeof baseValue === 'object'
+                ? withFallback(baseValue, value)
+                : value
+    }
+    return merged
+}
+
 export default getRequestConfig(async () => {
     const cookieStore = await cookies()
     const rawLocale = cookieStore.get('NEXT_LOCALE')?.value || 'en-US'
@@ -25,15 +41,16 @@ export default getRequestConfig(async () => {
         ? (rawLocale as SupportedLocale)
         : 'en-US'
 
-    let messages: Record<string, unknown>
+    const fallback = fallbackMessages as Messages
+    let messages: Messages = fallback
 
-    try {
-        messages = (await import(`../../messages/${locale}.json`)).default
-    } catch {
+    if (locale !== 'en-US' && locale !== 'en') {
         try {
-            messages = (await import('../../messages/en-US.json')).default
+            const localeMessages = (await import(`../../messages/${locale}.json`))
+                .default as Messages
+            messages = withFallback(fallback, localeMessages)
         } catch {
-            messages = (await import('../../messages/en-US.json')).default
+            messages = fallback
         }
     }
 

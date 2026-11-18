@@ -1,125 +1,190 @@
 "use client";
 
+import { useEffect, useId, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { useState, useTransition, useSyncExternalStore } from "react";
-import { Globe } from "lucide-react";
+import { useLocale, useTranslations } from "next-intl";
+import { Check, ChevronDown, Globe, Loader2 } from "lucide-react";
+import { cn } from "@/lib/cn";
 
-const LANGUAGES = [
-    { code: "en-US", label: "English (US)", flag: "🇺🇸" },
-    { code: "en-GB", label: "English (UK)", flag: "🇬🇧" },
-    { code: "de", label: "Deutsch", flag: "🇩🇪" },
-    { code: "es", label: "Español", flag: "🇪🇸" },
-    { code: "fr", label: "Français", flag: "🇫🇷" },
-    { code: "it", label: "Italiano", flag: "🇮🇹" },
-    { code: "pt", label: "Português", flag: "🇵🇹" },
-    { code: "tr", label: "Türkçe", flag: "🇹🇷" },
+// Native names, no flags: languages are not countries.
+export const LANGUAGES = [
+    { code: "en-US", label: "English (US)", short: "EN" },
+    { code: "en-GB", label: "English (UK)", short: "EN-GB" },
+    { code: "de", label: "Deutsch", short: "DE" },
+    { code: "es", label: "Español", short: "ES" },
+    { code: "fr", label: "Français", short: "FR" },
+    { code: "it", label: "Italiano", short: "IT" },
+    { code: "pt", label: "Português", short: "PT" },
+    { code: "tr", label: "Türkçe", short: "TR" },
 ] as const;
 
-const emptySubscribe = () => () => {};
-
-// Isolated DOM mutation helper
-function setLocaleCookie(newLocale: string): void {
-    if (typeof document !== "undefined") {
-        document.cookie = `NEXT_LOCALE=${newLocale}; path=/; max-age=31536000; SameSite=Lax`;
-    }
+function setLocaleCookie(locale: string) {
+    document.cookie = `NEXT_LOCALE=${locale}; path=/; max-age=31536000; SameSite=Lax`;
 }
 
-// React 18/19 idiom: Safely detect client hydration
-function useHydrated(): boolean {
-    return useSyncExternalStore(
-        emptySubscribe,
-        () => true,
-        () => false,
-    );
-}
-
-// React 18/19 idiom: Safely read browser cookies
-function useLocaleCookie(): string {
-    return useSyncExternalStore(
-        emptySubscribe,
-        () => {
-            if (typeof document === "undefined") return "en-US";
-            const match = document.cookie
-                .split("; ")
-                .find((row) => row.startsWith("NEXT_LOCALE="));
-            if (match) {
-                const val = match.split("=")[1];
-                if (val && LANGUAGES.some((l) => l.code === val)) {
-                    return val;
-                }
-            }
-            return "en-US";
-        },
-        () => "en-US",
-    );
-}
-
-export default function LanguageSwitcher() {
+export default function LanguageSwitcher({
+    variant = "compact",
+    placement = "bottom",
+    className,
+}: {
+    variant?: "compact" | "full";
+    placement?: "bottom" | "top";
+    className?: string;
+}) {
+    const t = useTranslations("Common");
     const router = useRouter();
+    const locale = useLocale();
     const [isPending, startTransition] = useTransition();
-    const [isOpen, setIsOpen] = useState(false);
-    const isMounted = useHydrated();
-    const cookieLocale = useLocaleCookie();
-    const [selectedLocale, setSelectedLocale] = useState<string | null>(null);
+    const [open, setOpen] = useState(false);
+    const [activeIndex, setActiveIndex] = useState(0);
+    const rootRef = useRef<HTMLDivElement>(null);
+    const buttonRef = useRef<HTMLButtonElement>(null);
+    const listRef = useRef<HTMLUListElement>(null);
+    const listId = useId();
 
-    const currentLocale = selectedLocale || cookieLocale;
+    const currentCode = locale === "en" ? "en-US" : locale;
+    const current =
+        LANGUAGES.find((l) => l.code === currentCode) ?? LANGUAGES[0];
 
-    const handleLanguageChange = (newLocale: string) => {
-        setLocaleCookie(newLocale);
-        setSelectedLocale(newLocale);
-        setIsOpen(false);
+    useEffect(() => {
+        if (!open) return;
+        const onPointer = (event: PointerEvent) => {
+            if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+        };
+        document.addEventListener("pointerdown", onPointer);
+        return () => document.removeEventListener("pointerdown", onPointer);
+    }, [open]);
 
-        startTransition(() => {
-            router.refresh();
-        });
+    useEffect(() => {
+        if (open) {
+            listRef.current
+                ?.querySelectorAll<HTMLElement>("[role=option]")
+                [activeIndex]?.focus();
+        }
+    }, [open, activeIndex]);
+
+    const openMenu = () => {
+        setActiveIndex(
+            Math.max(
+                0,
+                LANGUAGES.findIndex((l) => l.code === current.code),
+            ),
+        );
+        setOpen(true);
     };
 
-    const selectedLang =
-        LANGUAGES.find((l) => l.code === currentLocale) || LANGUAGES[0];
+    const choose = (code: string) => {
+        setOpen(false);
+        buttonRef.current?.focus();
+        if (code === current.code) return;
+        setLocaleCookie(code);
+        startTransition(() => router.refresh());
+    };
 
-    if (!isMounted) {
-        return (
-            <div className="bg-slate-800/80 text-slate-200 border border-slate-700/60 rounded-xl px-3 py-1.5 text-xs font-semibold flex items-center gap-2 opacity-80">
-                <Globe className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
-                <span>🇺🇸 English (US)</span>
-            </div>
-        );
-    }
+    const onListKeyDown = (event: React.KeyboardEvent) => {
+        if (event.key === "ArrowDown") {
+            event.preventDefault();
+            setActiveIndex((i) => (i + 1) % LANGUAGES.length);
+        } else if (event.key === "ArrowUp") {
+            event.preventDefault();
+            setActiveIndex((i) => (i - 1 + LANGUAGES.length) % LANGUAGES.length);
+        } else if (event.key === "Home") {
+            event.preventDefault();
+            setActiveIndex(0);
+        } else if (event.key === "End") {
+            event.preventDefault();
+            setActiveIndex(LANGUAGES.length - 1);
+        } else if (event.key === "Escape") {
+            event.preventDefault();
+            setOpen(false);
+            buttonRef.current?.focus();
+        } else if (event.key === "Tab") {
+            setOpen(false);
+        }
+    };
 
     return (
-        <div className="relative inline-block text-left">
+        <div ref={rootRef} className={cn("relative", className)}>
             <button
-                onClick={() => setIsOpen(!isOpen)}
-                disabled={isPending}
-                className="bg-slate-800/80 hover:bg-slate-700 text-slate-200 border border-slate-700/60 rounded-xl px-3 py-1.5 text-xs font-semibold flex items-center gap-2 transition cursor-pointer disabled:opacity-50"
+                ref={buttonRef}
+                type="button"
+                aria-haspopup="listbox"
+                aria-expanded={open}
+                aria-controls={listId}
+                aria-label={`${t("language")}: ${current.label}`}
+                onClick={() => (open ? setOpen(false) : openMenu())}
+                onKeyDown={(e) => {
+                    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+                        e.preventDefault();
+                        openMenu();
+                    }
+                }}
+                className={cn(
+                    "inline-flex h-9 items-center gap-1.5 rounded-[0.7rem] px-2.5 text-[13px] font-medium text-ink-2 transition-colors hover:bg-hover hover:text-ink",
+                    variant === "full" && "w-full justify-between",
+                    open && "bg-hover text-ink",
+                )}
             >
-                <Globe
-                    className={`w-3.5 h-3.5 text-indigo-400 shrink-0 ${
-                        isPending ? "animate-spin" : ""
-                    }`}
-                />
-                <span>
-                    {selectedLang.flag} {selectedLang.label}
+                <span className="inline-flex items-center gap-1.5">
+                    {isPending ? (
+                        <Loader2 className="size-4 animate-spin" strokeWidth={1.75} />
+                    ) : (
+                        <Globe className="size-4" strokeWidth={1.75} />
+                    )}
+                    <span className={cn(variant === "compact" && "font-mono text-[12px] tracking-wide")}>
+                        {variant === "compact" ? current.short : current.label}
+                    </span>
                 </span>
+                <ChevronDown
+                    className={cn(
+                        "size-3.5 opacity-60 transition-transform duration-200",
+                        open && "rotate-180",
+                    )}
+                />
             </button>
 
-            {isOpen && (
-                <div className="absolute right-0 mt-2 w-40 bg-slate-900 border border-slate-800 rounded-xl shadow-2xl py-1 z-50 animate-in fade-in duration-150">
-                    {LANGUAGES.map((lang) => (
-                        <button
-                            key={lang.code}
-                            onClick={() => handleLanguageChange(lang.code)}
-                            className={`w-full text-left px-3 py-2 text-xs font-medium flex items-center gap-2 hover:bg-slate-800 transition cursor-pointer ${
-                                lang.code === currentLocale
-                                    ? "text-indigo-400 font-bold bg-slate-800/50"
-                                    : "text-slate-300"
-                            }`}
-                        >
-                            <span>{lang.flag}</span>
-                            <span>{lang.label}</span>
-                        </button>
-                    ))}
-                </div>
+            {open && (
+                <ul
+                    ref={listRef}
+                    id={listId}
+                    role="listbox"
+                    aria-label={t("language")}
+                    onKeyDown={onListKeyDown}
+                    className={cn(
+                        "animate-pop absolute z-50 min-w-48 rounded-2xl bg-surface p-1.5 shadow-float ring-1 ring-line",
+                        placement === "bottom" ? "top-full mt-2" : "bottom-full mb-2",
+                        variant === "full" ? "left-0 w-full" : "right-0",
+                    )}
+                >
+                    {LANGUAGES.map((lang, index) => {
+                        const selected = lang.code === current.code;
+                        return (
+                            <li
+                                key={lang.code}
+                                role="option"
+                                aria-selected={selected}
+                                tabIndex={index === activeIndex ? 0 : -1}
+                                lang={lang.code}
+                                onClick={() => choose(lang.code)}
+                                onKeyDown={(e) => {
+                                    if (e.key === "Enter" || e.key === " ") {
+                                        e.preventDefault();
+                                        choose(lang.code);
+                                    }
+                                }}
+                                onMouseEnter={() => setActiveIndex(index)}
+                                className={cn(
+                                    "flex cursor-pointer items-center justify-between gap-3 rounded-xl px-3 py-2 text-[13.5px] outline-none transition-colors",
+                                    index === activeIndex ? "bg-hover text-ink" : "text-ink-2",
+                                    selected && "font-medium text-ink",
+                                )}
+                            >
+                                <span>{lang.label}</span>
+                                {selected && <Check className="size-4 text-accent" />}
+                            </li>
+                        );
+                    })}
+                </ul>
             )}
         </div>
     );

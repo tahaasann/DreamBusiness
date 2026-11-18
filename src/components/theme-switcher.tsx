@@ -1,83 +1,83 @@
 "use client";
 
-import { useState, useSyncExternalStore } from "react";
-import { Sun, Moon } from "lucide-react";
+import { useTranslations } from "next-intl";
+import { Moon, Sun } from "lucide-react";
+import { cn } from "@/lib/cn";
 
-const emptySubscribe = () => () => {};
+type Theme = "light" | "dark";
 
-// Isolated DOM theme application helper
-function applyThemeToDOM(nextTheme: "light" | "dark"): void {
-    if (typeof document !== "undefined") {
-        localStorage.setItem("theme", nextTheme);
-        if (nextTheme === "dark") {
-            document.documentElement.classList.add("dark");
-        } else {
-            document.documentElement.classList.remove("dark");
+interface ViewTransitionDocument {
+    startViewTransition?: (callback: () => void) => { ready: Promise<void> };
+}
+
+function applyTheme(next: Theme) {
+    document.documentElement.classList.toggle("dark", next === "dark");
+    try {
+        localStorage.setItem("theme", next);
+    } catch {
+        // Private mode or blocked storage: the theme still applies for this visit.
+    }
+}
+
+/**
+ * Switches light/dark. Where the browser supports View Transitions the new
+ * theme spreads out in a circle from the button that was pressed.
+ */
+export default function ThemeSwitcher({ className }: { className?: string }) {
+    const t = useTranslations("Common");
+
+    const toggle = (event: React.MouseEvent<HTMLButtonElement>) => {
+        const next: Theme = document.documentElement.classList.contains("dark")
+            ? "light"
+            : "dark";
+        const doc = document as unknown as ViewTransitionDocument;
+        const reduceMotion = window.matchMedia(
+            "(prefers-reduced-motion: reduce)",
+        ).matches;
+
+        if (!doc.startViewTransition || reduceMotion) {
+            applyTheme(next);
+            return;
         }
-    }
-}
 
-// React 18/19 idiom: Detect hydration synchronously
-function useHydrated(): boolean {
-    return useSyncExternalStore(
-        emptySubscribe,
-        () => true,
-        () => false,
-    );
-}
-
-// React 18/19 idiom: Read localStorage state synchronously
-function useStoredTheme(): "light" | "dark" {
-    return useSyncExternalStore(
-        emptySubscribe,
-        () => {
-            if (typeof window === "undefined") return "light";
-            const saved = localStorage.getItem("theme");
-            if (
-                saved === "dark" ||
-                document.documentElement.classList.contains("dark")
-            ) {
-                return "dark";
-            }
-            return "light";
-        },
-        () => "light",
-    );
-}
-
-export default function ThemeSwitcher() {
-    const isMounted = useHydrated();
-    const storedTheme = useStoredTheme();
-    const [localTheme, setLocalTheme] = useState<"light" | "dark" | null>(null);
-
-    const activeTheme = localTheme || storedTheme;
-
-    const toggleTheme = () => {
-        const nextTheme = activeTheme === "dark" ? "light" : "dark";
-        applyThemeToDOM(nextTheme);
-        setLocalTheme(nextTheme);
-    };
-
-    if (!isMounted) {
-        return (
-            <div className="size-8 rounded-full bg-zinc-100 border border-zinc-200 flex items-center justify-center text-zinc-600">
-                <Sun className="size-4" />
-            </div>
+        const rect = event.currentTarget.getBoundingClientRect();
+        const x = rect.left + rect.width / 2;
+        const y = rect.top + rect.height / 2;
+        const radius = Math.hypot(
+            Math.max(x, window.innerWidth - x),
+            Math.max(y, window.innerHeight - y),
         );
-    }
+
+        const transition = doc.startViewTransition(() => applyTheme(next));
+        transition.ready
+            .then(() => {
+                document.documentElement.animate(
+                    {
+                        clipPath: [
+                            `circle(0px at ${x}px ${y}px)`,
+                            `circle(${radius}px at ${x}px ${y}px)`,
+                        ],
+                    },
+                    {
+                        duration: 520,
+                        easing: "cubic-bezier(0.16, 1, 0.3, 1)",
+                        pseudoElement: "::view-transition-new(root)",
+                    },
+                );
+            })
+            .catch(() => {});
+    };
 
     return (
         <button
             type="button"
-            onClick={toggleTheme}
-            aria-label="Toggle Theme"
-            className="size-8 rounded-full bg-zinc-100 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 flex items-center justify-center text-zinc-700 dark:text-zinc-200 hover:scale-105 active:scale-95 transition-all cursor-pointer shadow-xs"
+            onClick={toggle}
+            aria-label={t("toggleTheme")}
+            title={t("toggleTheme")}
+            className={cn("icon-btn", className)}
         >
-            {activeTheme === "dark" ? (
-                <Sun className="size-4 text-amber-400" />
-            ) : (
-                <Moon className="size-4 text-zinc-700" />
-            )}
+            <Moon className="size-[17px] dark:hidden" strokeWidth={1.75} />
+            <Sun className="hidden size-[17px] dark:block" strokeWidth={1.75} />
         </button>
     );
 }

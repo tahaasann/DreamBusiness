@@ -228,9 +228,17 @@ export async function createDemoLocationForUser() {
             .select('*', { count: 'exact', head: true })
             .eq('user_id', user.id)
 
-        const branchNumber = (count || 0) + 1
-        const branchNames = ['Kadıköy', 'Nişantaşı', 'Moda', 'Beşiktaş', 'Bebek']
-        const branchSuffix = branchNames[(branchNumber - 1) % branchNames.length] || `#${branchNumber}`
+        // Demo apps mirror the Google Play product: fictional apps with
+        // reviews in several supported languages.
+        const demoNumber = (count || 0) + 1
+        const demoAppNames = [
+            'Fernly: Budget & Savings',
+            'Lumen Weather',
+            'Habitly: Daily Habits',
+            'Sprout Notes',
+            'Pace Run Tracker',
+        ]
+        const demoAppName = demoAppNames[(demoNumber - 1) % demoAppNames.length] || `Demo App ${demoNumber}`
 
         const uniqueDemoId = `loc_demo_${user.id.slice(0, 4)}_${Date.now()}`
 
@@ -239,7 +247,7 @@ export async function createDemoLocationForUser() {
             .insert({
                 user_id: user.id,
                 google_location_id: uniqueDemoId,
-                business_name: `Metropolitan Bistro (${branchSuffix})`,
+                business_name: demoAppName,
                 default_tone: 'friendly',
             })
             .select()
@@ -250,35 +258,50 @@ export async function createDemoLocationForUser() {
         // Trigger atomic metric event
         await recordEventBranchCreated()
 
-        const demoReviews: DemoReviewInsert[] = [
+        const seededAt = Date.now()
+        const minutesAgo = (minutes: number) => new Date(seededAt - minutes * 60_000).toISOString()
+        const demoSamples = [
             {
-                location_id: location.id,
-                google_review_id: `rev_demo_${location.id.slice(0, 8)}_${Date.now()}_1`,
-                author_name: 'Michael Scott',
-                rating: 5,
-                comment: `Outstanding ribeye steak and wine selection at the ${branchSuffix} branch!`,
-                status: 'pending',
-                review_created_at: new Date().toISOString(),
+                author_name: 'Jordan Price',
+                rating: 1,
+                comment: "Since the last update the app crashes every time I open Reports. I've used it daily for two years, please fix this.",
+                minutes: 2,
             },
             {
-                location_id: location.id,
-                google_review_id: `rev_demo_${location.id.slice(0, 8)}_${Date.now()}_2`,
-                author_name: 'Elena Rostova',
+                author_name: 'Lena Wagner',
                 rating: 2,
-                comment: `We reserved a table at ${branchSuffix} but had to wait 35 minutes in the rain.`,
-                status: 'pending',
-                review_created_at: new Date().toISOString(),
+                comment: 'Die Synchronisierung mit meinem Tablet funktioniert seit Tagen nicht. Schade, sonst wirklich eine tolle App!',
+                minutes: 14,
             },
             {
-                location_id: location.id,
-                google_review_id: `rev_demo_${location.id.slice(0, 8)}_${Date.now()}_3`,
-                author_name: 'David Miller',
+                author_name: 'Elif Kaya',
+                rating: 3,
+                comment: 'Uygulama çok güzel ama abonelik fiyatı biraz yüksek. Öğrenci indirimi olsa harika olurdu.',
+                minutes: 52,
+            },
+            {
+                author_name: 'Marco Bianchi',
                 rating: 4,
-                comment: 'Great atmosphere and polite waiters. Dessert took a bit long.',
-                status: 'pending',
-                review_created_at: new Date().toISOString(),
+                comment: 'Ottima app, ma mi piacerebbe poter esportare i dati in CSV.',
+                minutes: 190,
+            },
+            {
+                author_name: 'Rafael Souza',
+                rating: 5,
+                comment: 'Melhor app de finanças que já usei. Simples, bonito e me ajudou a economizar de verdade!',
+                minutes: 1440,
             },
         ]
+
+        const demoReviews: DemoReviewInsert[] = demoSamples.map((sample, index) => ({
+            location_id: location.id,
+            google_review_id: `rev_demo_${location.id.slice(0, 8)}_${seededAt}_${index + 1}`,
+            author_name: sample.author_name,
+            rating: sample.rating,
+            comment: sample.comment,
+            status: 'pending',
+            review_created_at: minutesAgo(sample.minutes),
+        }))
 
         const insertedReviews: Record<string, unknown>[] = []
 

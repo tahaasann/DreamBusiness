@@ -1,10 +1,8 @@
 import { sanitizeReviewInput } from '@/lib/sanitizer'
+import type { DraftLanguage, DraftTone } from '@/lib/ai/draft-options'
 
-export const DRAFT_TONES = ['professional', 'friendly', 'apologetic', 'casual'] as const
-export type DraftTone = (typeof DRAFT_TONES)[number]
-
-export const DRAFT_LANGUAGES = ['en-US', 'en-GB', 'de', 'es', 'fr', 'it', 'pt', 'tr'] as const
-export type DraftLanguage = (typeof DRAFT_LANGUAGES)[number]
+export { DRAFT_TONES, DRAFT_LANGUAGES } from '@/lib/ai/draft-options'
+export type { DraftTone, DraftLanguage } from '@/lib/ai/draft-options'
 
 const LANGUAGE_NAMES: Record<DraftLanguage, string> = {
     'en-US': 'English (US)',

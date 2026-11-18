@@ -1,18 +1,14 @@
-import { createClient } from "@/lib/supabase/server";
+import type { Metadata } from "next";
 import { redirect } from "next/navigation";
+import { getTranslations } from "next-intl/server";
+import { createClient } from "@/lib/supabase/server";
 import { checkUserEntitlement } from "@/lib/subscriptions";
+import type { ReviewItem } from "@/components/dashboard/helpers";
 import DashboardClientView from "./dashboard-client";
 
-interface ReviewRecord {
-    id: string;
-    location_id: string;
-    google_review_id: string;
-    author_name: string;
-    rating: number;
-    comment: string | null;
-    status: string;
-    review_created_at?: string;
-    created_at?: string;
+export async function generateMetadata(): Promise<Metadata> {
+    const t = await getTranslations("Dashboard");
+    return { title: t("metaTitle") };
 }
 
 export default async function DashboardPage() {
@@ -26,7 +22,6 @@ export default async function DashboardPage() {
         redirect("/login");
     }
 
-    // Load actual entitlement state
     const entitlement = await checkUserEntitlement(user.id);
 
     const { data: locations } = await supabase
@@ -34,7 +29,7 @@ export default async function DashboardPage() {
         .select("*")
         .eq("user_id", user.id);
 
-    let reviews: ReviewRecord[] = [];
+    let reviews: ReviewItem[] = [];
 
     if (locations && locations.length > 0) {
         const locationIds = locations.map((loc) => loc.id);
@@ -44,7 +39,7 @@ export default async function DashboardPage() {
             .in("location_id", locationIds)
             .order("created_at", { ascending: false });
 
-        reviews = (fetchedReviews as ReviewRecord[]) || [];
+        reviews = (fetchedReviews as ReviewItem[]) || [];
     }
 
     return (
@@ -52,7 +47,6 @@ export default async function DashboardPage() {
             userId={user.id}
             userEmail={user.email || ""}
             isPro={entitlement.isPro}
-            subscriptionPlan={entitlement.plan}
             initialLocations={locations || []}
             initialReviews={reviews}
         />
