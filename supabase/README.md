@@ -21,8 +21,15 @@ Betikler 02–05, sunucunun `SUPABASE_SECRET_KEY` ile çalışmasını varsayar
 
 ## `migrations/` — bundan sonraki değişiklikler
 
-`06_export_schema.sql` çıktısı `migrations/20261118000000_baseline.sql` olarak
-kaydedildi (canlıya uygulanmaz; yeni ortam kurarken ilk adımdır).
-`20261118000100_hardening.sql` canlıya SQL Editor'dan uygulanır. Ondan sonraki her şema değişikliği yeni, tarihli bir migration
-dosyasıyla yapılır; Dashboard'dan elle tablo değiştirilmez. Böylece yeni bir ortam
-(staging, yerel) aynı şemayla kurulabilir ve RLS kuralları kod incelemesinden geçer.
+| Dosya | Ne yapar | Canlıda |
+|---|---|---|
+| `20261118000000_baseline.sql` | 06 çıktısından canlı şema (2026-11-18) | Uygulanmaz; yeni ortamın ilk adımı |
+| `20261118000100_hardening.sql` | Gereksiz istemci yetkileri, search_path, tekrar eden indeksler | Uygulandı |
+| `20261118000200_play_data_model.sql` | Google Play tabloları: `store_credentials`, `apps`, `app_reviews`, `reply_logs`; RLS; yeni hız sınırı kovaları | SQL Editor'dan uygulanır |
+
+Her şema değişikliği yeni, tarihli bir migration dosyasıyla yapılır; Dashboard'dan
+elle tablo değiştirilmez. Böylece yeni bir ortam (staging, yerel) aynı şemayla
+kurulabilir ve RLS kuralları kod incelemesinden geçer.
+
+Migration'lar birleştirilmeden önce boş bir Postgres 16'da sırayla çalıştırılır ve
+sahiplik kuralları rol değiştirerek (anon, authenticated) test edilir.
