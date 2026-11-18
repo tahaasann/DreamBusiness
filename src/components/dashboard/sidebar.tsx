@@ -2,12 +2,12 @@
 
 import Link from "next/link";
 import { useTranslations } from "next-intl";
-import { ArrowUpRight, Crown, Inbox, Loader2, LogOut, Plus, Sparkles } from "lucide-react";
+import { AlertTriangle, Crown, Inbox, KeyRound, Loader2, LogOut, Plus, Sparkles } from "lucide-react";
 import Logo from "@/components/brand/logo";
 import ThemeSwitcher from "@/components/theme-switcher";
 import LanguageSwitcher from "@/components/language-switcher";
 import { cn } from "@/lib/cn";
-import { hueFor, initialsFor, type AppItem } from "./helpers";
+import { hueFor, initialsFor, type AppItem, type CredentialItem } from "./helpers";
 
 export interface SidebarProps {
     apps: AppItem[];
@@ -16,6 +16,9 @@ export interface SidebarProps {
     onSelectApp: (id: string) => void;
     onAddDemo: () => void;
     addingDemo: boolean;
+    credentials: CredentialItem[];
+    onConnect: () => void;
+    onManageConnection: () => void;
     isPro: boolean;
     onUpgrade: () => void;
     userEmail: string;
@@ -71,6 +74,9 @@ export default function Sidebar({
     onSelectApp,
     onAddDemo,
     addingDemo,
+    credentials,
+    onConnect,
+    onManageConnection,
     isPro,
     onUpgrade,
     userEmail,
@@ -113,8 +119,16 @@ export default function Sidebar({
                                         active ? "bg-hover font-medium text-ink" : "text-ink-2 hover:bg-hover/60 hover:text-ink",
                                     )}
                                 >
-                                    <AppAvatar name={app.business_name} />
-                                    <span className="min-w-0 flex-1 truncate">{app.business_name}</span>
+                                    <AppAvatar name={app.display_name} />
+                                    <span className="min-w-0 flex-1 truncate">{app.display_name}</span>
+                                    {app.is_demo && (
+                                        <span className="rounded bg-line px-1 py-px text-[10px] font-medium uppercase tracking-wide text-ink-3">
+                                            {t("demoBadge")}
+                                        </span>
+                                    )}
+                                    {!app.is_demo && (app.last_sync_error || !app.credential_id) && (
+                                        <AlertTriangle className="size-3.5 text-warn" aria-label={t("syncProblem")} />
+                                    )}
                                     {pending > 0 && (
                                         <span className="text-[11.5px] text-ink-3 tabular">{pending}</span>
                                     )}
@@ -126,28 +140,49 @@ export default function Sidebar({
 
                 <button
                     type="button"
+                    onClick={onConnect}
+                    className="mt-1 flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-left text-[13.5px] font-medium text-accent transition-colors hover:bg-accent-soft"
+                >
+                    <span className="grid size-7 place-items-center rounded-[0.55rem] bg-accent-soft">
+                        <Plus className="size-3.5" />
+                    </span>
+                    {credentials.length ? t("addApp") : t("connectPlay")}
+                </button>
+
+                <button
+                    type="button"
                     onClick={onAddDemo}
                     disabled={addingDemo}
-                    className="mt-1 flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-left text-[13.5px] text-ink-3 transition-colors hover:bg-hover/60 hover:text-ink disabled:opacity-60"
+                    className="mt-0.5 flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-left text-[13.5px] text-ink-3 transition-colors hover:bg-hover/60 hover:text-ink disabled:opacity-60"
                 >
                     <span className="grid size-7 place-items-center rounded-[0.55rem] border border-dashed border-line-strong">
-                        {addingDemo ? <Loader2 className="size-3.5 animate-spin" /> : <Plus className="size-3.5" />}
+                        {addingDemo ? <Loader2 className="size-3.5 animate-spin" /> : <Sparkles className="size-3.5" />}
                     </span>
                     {addingDemo ? t("addingDemoApp") : t("addDemoApp")}
                 </button>
 
-                <div
-                    aria-disabled="true"
-                    className="mt-0.5 flex items-center gap-2.5 rounded-xl px-2.5 py-2 text-[13.5px] text-ink-3/80"
-                >
-                    <span className="grid size-7 place-items-center rounded-[0.55rem] ring-1 ring-line">
-                        <ArrowUpRight className="size-3.5" />
-                    </span>
-                    {t("connectPlay")}
-                    <span className="ml-auto rounded-full bg-line px-1.5 py-px text-[10.5px] font-medium text-ink-3">
-                        {t("comingSoon")}
-                    </span>
-                </div>
+                {credentials.length > 0 && (
+                    <>
+                        <p className="eyebrow mb-2 mt-7 px-3">{t("connection")}</p>
+                        <button
+                            type="button"
+                            onClick={onManageConnection}
+                            className="flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-left text-[12.5px] text-ink-2 transition-colors hover:bg-hover/60 hover:text-ink"
+                        >
+                            <span className="grid size-7 shrink-0 place-items-center rounded-[0.55rem] ring-1 ring-line">
+                                <KeyRound className="size-3.5" />
+                            </span>
+                            <span className="min-w-0 flex-1">
+                                <span className="block truncate" title={credentials[0].service_account_email}>
+                                    {credentials[0].service_account_email}
+                                </span>
+                                <span className={cn("block text-[11px]", credentials[0].last_error ? "text-warn" : "text-ok")}>
+                                    {credentials[0].last_error ? t("connectionProblem") : t("connectionOk")}
+                                </span>
+                            </span>
+                        </button>
+                    </>
+                )}
             </nav>
 
             <div className="space-y-3 border-t border-line p-3">

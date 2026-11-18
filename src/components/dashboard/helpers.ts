@@ -3,31 +3,22 @@
 import { useSyncExternalStore } from "react";
 import { useLocale } from "next-intl";
 
-export interface AppItem {
-    id: string;
-    user_id?: string;
-    google_location_id: string;
-    business_name: string;
-    default_tone?: string;
-    created_at?: string;
-}
+import type { ReviewItem } from "@/lib/play/types";
 
-export interface ReviewItem {
-    id: string;
-    location_id: string;
-    google_review_id: string;
-    author_name: string;
-    rating: number;
-    comment: string | null;
-    status: string;
-    review_created_at?: string;
-    created_at?: string;
-}
+export type { AppItem, ReviewItem, CredentialItem } from "@/lib/play/types";
 
 export const isReplied = (review: ReviewItem) => review.status === "replied";
-export const isLiveReview = (review: ReviewItem) => review.google_review_id.startsWith("accounts/");
-export const reviewTime = (review: ReviewItem) =>
-    review.review_created_at ?? review.created_at ?? "";
+export const reviewTime = (review: ReviewItem) => review.review_updated_at ?? review.created_at ?? "";
+export const authorOf = (review: ReviewItem, fallback: string) => review.author_name?.trim() || fallback;
+
+/** Android API level → marketing version, for the review's device line. */
+export function androidVersionName(apiLevel: number | null): string | null {
+    if (!apiLevel) return null;
+    const names: Record<number, string> = {
+        36: "16", 35: "15", 34: "14", 33: "13", 32: "12L", 31: "12", 30: "11", 29: "10", 28: "9", 27: "8.1", 26: "8.0",
+    };
+    return names[apiLevel] ? `Android ${names[apiLevel]}` : `API ${apiLevel}`;
+}
 
 /** Stable hue (0–359) for tinting avatars from a name. */
 export function hueFor(name: string): number {

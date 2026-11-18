@@ -13,11 +13,32 @@ import { playErrorMessage, toPlayApiError, type PlayErrorCode } from '@/lib/play
 import { msUntilNextSync } from '@/lib/play/quota'
 import { parseServiceAccount, serviceAccountProblemMessage } from '@/lib/play/service-account'
 import { syncPlayApp } from '@/lib/play/sync'
+import { APP_COLUMNS, REVIEW_COLUMNS, type AppItem, type CredentialItem, type ReviewItem } from '@/lib/play/types'
 
 type Failure = { success: false; error: string; code?: PlayErrorCode }
 
 const SIGN_IN_ERROR: Failure = { success: false, error: 'You need to sign in first.' }
 const GENERIC_ERROR: Failure = { success: false, error: 'Something went wrong. Please try again.' }
+
+type UserClient = Extract<Awaited<ReturnType<typeof requireUser>>, { ok: true }>['supabase']
+
+/** Fresh app row and its reviews, so the dashboard can update without a reload. */
+async function readAppState(supabase: UserClient, appId: string, userId: string) {
+    const [app, reviews] = await Promise.all([
+        supabase.from('apps').select(APP_COLUMNS).eq('id', appId).eq('user_id', userId).maybeSingle(),
+        supabase
+            .from('app_reviews')
+            .select(REVIEW_COLUMNS)
+            .eq('app_id', appId)
+            .eq('user_id', userId)
+            .order('review_updated_at', { ascending: false })
+            .limit(1000),
+    ])
+    return {
+        app: (app.data ?? null) as unknown as AppItem | null,
+        reviews: (reviews.data ?? []) as unknown as ReviewItem[],
+    }
+}
 
 function playFailure(error: unknown): Failure {
     const { code } = toPlayApiError(error)
@@ -27,7 +48,7 @@ function playFailure(error: unknown): Failure {
 // ── 2.02 + 2.03 · Connect a service account ──────────────────────────
 
 export type ConnectPlayAccountResult =
-    | { success: true; credentialId: string; serviceAccountEmail: string }
+    | { success: true; credentialId: string; serviceAccountEmail: string; credential: CredentialItem }
     | Failure
 
 /**
@@ -55,7 +76,17 @@ export async function connectPlayAccount(serviceAccountJson: string): Promise<Co
         }
 
         const { id } = await saveCredential(createAdminClient(), auth.user.id, parsed.key)
-        return { success: true, credentialId: id, serviceAccountEmail: parsed.key.clientEmail }
+        return {
+            success: true,
+            credentialId: id,
+            serviceAccountEmail: parsed.key.clientEmail,
+            credential: {
+                id,
+                service_account_email: parsed.key.clientEmail,
+                last_verified_at: new Date().toISOString(),
+                last_error: null,
+            },
+        }
     } catch (error: unknown) {
         console.error('connectPlayAccount failed:', error)
         return GENERIC_ERROR
@@ -75,7 +106,13 @@ const AddAppSchema = z.object({
 })
 
 export type AddPlayAppResult =
-    | { success: true; appId: string; initialSync: { ok: boolean; saved: number; error?: string } }
+    | {
+          success: true
+          appId: string
+          app: AppItem | null
+          reviews: ReviewItem[]
+          initialSync: { ok: boolean; saved: number; error?: string }
+      }
     | Failure
 
 export async function addPlayApp(input: {
@@ -133,9 +170,11 @@ export async function addPlayApp(input: {
 
         // Best effort: fill the inbox right away. The app is saved either way.
         const sync = await syncPlayApp(supabase, app, accessToken)
+        const state = await readAppState(supabase, app.id, user.id)
         return {
             success: true,
             appId: app.id,
+            ...state,
             initialSync: sync.ok
                 ? { ok: true, saved: sync.saved }
                 : { ok: false, saved: sync.saved, error: playErrorMessage(sync.code) },
@@ -149,8 +188,8 @@ export async function addPlayApp(input: {
 // ── 2.06 + 2.07 · Manual sync ───────────────────────────────────────
 
 export type SyncPlayAppResult =
-    | { success: true; fetched: number; saved: number; syncedAt: string }
-    | (Failure & { retryInSeconds?: number })
+    | { success: true; fetched: number; saved: number; syncedAt: string; app: AppItem | null; reviews: ReviewItem[] }
+    | (Failure & { retryInSeconds?: number; app?: AppItem | null })
 
 export async function syncPlayAppNow(appId: string): Promise<SyncPlayAppResult> {
     try {
@@ -198,8 +237,17 @@ export async function syncPlayAppNow(appId: string): Promise<SyncPlayAppResult> 
         }
 
         const result = await syncPlayApp(supabase, app, accessToken)
-        if (!result.ok) return { success: false, error: playErrorMessage(result.code), code: result.code }
-        return { success: true, fetched: result.fetched, saved: result.saved, syncedAt: new Date().toISOString() }
+        const state = await readAppState(supabase, app.id, user.id)
+        if (!result.ok) {
+            return { success: false, error: playErrorMessage(result.code), code: result.code, app: state.app }
+        }
+        return {
+            success: true,
+            fetched: result.fetched,
+            saved: result.saved,
+            syncedAt: new Date().toISOString(),
+            ...state,
+        }
     } catch (error: unknown) {
         console.error('syncPlayAppNow failed:', error)
         return GENERIC_ERROR
