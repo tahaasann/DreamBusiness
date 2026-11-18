@@ -79,11 +79,14 @@ describe('Play server actions', () => {
 
             const result = await connectPlayAccount(serviceAccountJson())
 
-            expect(result).toEqual({
+            expect(result).toMatchObject({
                 success: true,
                 credentialId: CRED_ID,
                 serviceAccountEmail: 'replies@proficios-test.iam.gserviceaccount.com',
+                credential: { id: CRED_ID, last_error: null },
             })
+            // The dashboard gets metadata only, never the key.
+            expect(JSON.stringify(result)).not.toContain('PRIVATE KEY')
             const row = adminDb.find('store_credentials', 'upsert')[0].values as Record<string, string>
             expect(row.user_id).toBe('user_a')
             expect(row.encrypted_key).not.toContain('PRIVATE KEY')

@@ -2,10 +2,11 @@
 
 import { forwardRef } from "react";
 import { useTranslations } from "next-intl";
-import { ArrowDownWideNarrow, Check, CheckCheck, Search, SearchX } from "lucide-react";
+import { AlertTriangle, ArrowDownWideNarrow, Check, CheckCheck, ChevronDown, Loader2, RefreshCw, Search, SearchX } from "lucide-react";
 import Stars from "@/components/ui/stars";
 import { cn } from "@/lib/cn";
 import {
+    authorOf,
     hueFor,
     initialsFor,
     isReplied,
@@ -16,6 +17,57 @@ import {
 
 export type Filter = "all" | "pending" | "replied";
 export type Sort = "newest" | "lowest";
+
+/** Extra inbox filters (task 4.05). "all" means no filter. */
+export interface Facets {
+    stars: "all" | "1" | "2" | "3" | "4" | "5";
+    language: string;
+    version: string;
+}
+export const NO_FACETS: Facets = { stars: "all", language: "all", version: "all" };
+
+export interface SyncState {
+    isDemo: boolean;
+    connected: boolean;
+    lastSyncedAt: string | null;
+    error: string | null;
+    syncing: boolean;
+    onSync: () => void;
+}
+
+function FacetSelect({
+    label,
+    value,
+    onChange,
+    options,
+}: {
+    label: string;
+    value: string;
+    onChange: (value: string) => void;
+    options: { value: string; label: string }[];
+}) {
+    return (
+        <label className="relative min-w-0 flex-1">
+            <span className="sr-only">{label}</span>
+            <select
+                value={value}
+                onChange={(e) => onChange(e.target.value)}
+                title={label}
+                className={cn(
+                    "h-8 w-full appearance-none truncate rounded-[0.65rem] bg-surface pl-2.5 pr-7 text-[12px] font-medium shadow-xs ring-1 outline-none transition focus-visible:ring-accent",
+                    value === "all" ? "text-ink-3 ring-line" : "text-accent ring-accent/40",
+                )}
+            >
+                {options.map((option) => (
+                    <option key={option.value} value={option.value}>
+                        {option.label}
+                    </option>
+                ))}
+            </select>
+            <ChevronDown className="pointer-events-none absolute right-2 top-1/2 size-3.5 -translate-y-1/2 text-ink-3" />
+        </label>
+    );
+}
 
 interface ReviewListProps {
     appName: string;
@@ -30,6 +82,11 @@ interface ReviewListProps {
     onFilterChange: (value: Filter) => void;
     sort: Sort;
     onSortChange: (value: Sort) => void;
+    facets: Facets;
+    onFacetsChange: (value: Facets) => void;
+    languageOptions: { value: string; label: string }[];
+    versionOptions: string[];
+    sync: SyncState;
     className?: string;
 }
 
@@ -47,6 +104,11 @@ const ReviewList = forwardRef<HTMLInputElement, ReviewListProps>(function Review
         onFilterChange,
         sort,
         onSortChange,
+        facets,
+        onFacetsChange,
+        languageOptions,
+        versionOptions,
+        sync,
         className,
     },
     searchRef,
@@ -61,6 +123,7 @@ const ReviewList = forwardRef<HTMLInputElement, ReviewListProps>(function Review
     ];
 
     const inboxZero = counts.all > 0 && counts.pending === 0;
+    const facetActive = facets.stars !== "all" || facets.language !== "all" || facets.version !== "all";
 
     return (
         <section className={cn("flex min-h-0 flex-col border-r border-line bg-canvas", className)}>
@@ -91,6 +154,37 @@ const ReviewList = forwardRef<HTMLInputElement, ReviewListProps>(function Review
                         {t("pendingCount", { count: counts.pending })}
                     </span>
                 </div>
+
+                {!sync.isDemo && (
+                    <div className="flex items-center gap-2 text-[12px]">
+                        {sync.error ? (
+                            <span className="inline-flex min-w-0 items-center gap-1.5 text-warn" title={sync.error}>
+                                <AlertTriangle className="size-3.5 shrink-0" />
+                                <span className="truncate">{t("syncProblem")}</span>
+                            </span>
+                        ) : !sync.connected ? (
+                            <span className="inline-flex min-w-0 items-center gap-1.5 text-warn">
+                                <AlertTriangle className="size-3.5 shrink-0" />
+                                <span className="truncate">{t("notConnected")}</span>
+                            </span>
+                        ) : (
+                            <span className="truncate text-ink-3">
+                                {sync.lastSyncedAt
+                                    ? t("lastSynced", { time: relative(sync.lastSyncedAt) })
+                                    : t("neverSynced")}
+                            </span>
+                        )}
+                        <button
+                            type="button"
+                            onClick={sync.onSync}
+                            disabled={sync.syncing || !sync.connected}
+                            className="btn btn-sm btn-ghost ml-auto -mr-2 shrink-0"
+                        >
+                            {sync.syncing ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />}
+                            {sync.syncing ? t("syncing") : t("syncNow")}
+                        </button>
+                    </div>
+                )}
 
                 <div className="flex items-center gap-2">
                 <label className="relative block min-w-0 flex-1">
@@ -146,6 +240,33 @@ const ReviewList = forwardRef<HTMLInputElement, ReviewListProps>(function Review
                             </button>
                         ))}
                     </div>
+
+                    <div className="flex gap-1.5" role="group" aria-label={t("moreFilters")}>
+                        <FacetSelect
+                            label={t("facetStars")}
+                            value={facets.stars}
+                            onChange={(stars) => onFacetsChange({ ...facets, stars: stars as Facets["stars"] })}
+                            options={[
+                                { value: "all", label: t("facetStarsAll") },
+                                ...["5", "4", "3", "2", "1"].map((value) => ({ value, label: `${value} ★` })),
+                            ]}
+                        />
+                        <FacetSelect
+                            label={t("facetLanguage")}
+                            value={facets.language}
+                            onChange={(language) => onFacetsChange({ ...facets, language })}
+                            options={[{ value: "all", label: t("facetLanguageAll") }, ...languageOptions]}
+                        />
+                        <FacetSelect
+                            label={t("facetVersion")}
+                            value={facets.version}
+                            onChange={(version) => onFacetsChange({ ...facets, version })}
+                            options={[
+                                { value: "all", label: t("facetVersionAll") },
+                                ...versionOptions.map((value) => ({ value, label: value })),
+                            ]}
+                        />
+                    </div>
             </header>
 
             <div className="thin-scrollbar min-h-0 flex-1 overflow-y-auto">
@@ -161,8 +282,10 @@ const ReviewList = forwardRef<HTMLInputElement, ReviewListProps>(function Review
                                     {t("inboxZeroBody", { app: appName })}
                                 </p>
                             </>
-                        ) : counts.all === 0 ? (
-                            <p className="text-[13.5px] text-ink-3">{t("noReviews")}</p>
+                        ) : counts.all === 0 && !facetActive ? (
+                            <p className="max-w-[16rem] text-[13.5px] text-ink-3">
+                                {sync.isDemo || sync.lastSyncedAt ? t("noReviews") : t("noReviewsYet")}
+                            </p>
                         ) : (
                             <>
                                 <SearchX className="size-6 text-ink-3" strokeWidth={1.5} />
@@ -172,6 +295,7 @@ const ReviewList = forwardRef<HTMLInputElement, ReviewListProps>(function Review
                                     onClick={() => {
                                         onQueryChange("");
                                         onFilterChange("all");
+                                        onFacetsChange(NO_FACETS);
                                     }}
                                     className="btn btn-sm btn-secondary mt-4"
                                 >
@@ -185,6 +309,7 @@ const ReviewList = forwardRef<HTMLInputElement, ReviewListProps>(function Review
                         {reviews.map((review) => {
                             const selected = review.id === selectedId;
                             const replied = isReplied(review);
+                            const author = authorOf(review, t("anonymousReviewer"));
                             return (
                                 <li key={review.id}>
                                     <button
@@ -206,9 +331,9 @@ const ReviewList = forwardRef<HTMLInputElement, ReviewListProps>(function Review
                                         <div className="flex items-start gap-3">
                                             <span
                                                 className="avatar size-8 text-[11px]"
-                                                style={{ "--h": hueFor(review.author_name) } as React.CSSProperties}
+                                                style={{ "--h": hueFor(author) } as React.CSSProperties}
                                             >
-                                                {initialsFor(review.author_name)}
+                                                {initialsFor(author)}
                                             </span>
                                             <div className="min-w-0 flex-1">
                                                 <div className="flex items-baseline justify-between gap-2">
@@ -218,14 +343,17 @@ const ReviewList = forwardRef<HTMLInputElement, ReviewListProps>(function Review
                                                             replied ? "text-ink-2" : "font-semibold text-ink",
                                                         )}
                                                     >
-                                                        {review.author_name}
+                                                        {author}
                                                     </span>
                                                     <span className="shrink-0 text-[11.5px] text-ink-3 tabular">
                                                         {relative(reviewTime(review))}
                                                     </span>
                                                 </div>
                                                 <div className="mt-0.5 flex items-center gap-2">
-                                                    <Stars value={review.rating} size={11} />
+                                                    <Stars value={review.star_rating} size={11} />
+                                                    {review.app_version_name && (
+                                                        <span className="font-mono text-[10.5px] text-ink-3">v{review.app_version_name}</span>
+                                                    )}
                                                     {replied && (
                                                         <span className="inline-flex items-center gap-0.5 text-[11px] font-medium text-ok">
                                                             <Check className="size-3" strokeWidth={2.5} />
@@ -234,7 +362,7 @@ const ReviewList = forwardRef<HTMLInputElement, ReviewListProps>(function Review
                                                     )}
                                                 </div>
                                                 <p className="mt-1.5 line-clamp-2 text-[12.5px] leading-snug text-ink-3">
-                                                    {review.comment || t("noComment")}
+                                                    {review.review_text || t("noComment")}
                                                 </p>
                                             </div>
                                         </div>

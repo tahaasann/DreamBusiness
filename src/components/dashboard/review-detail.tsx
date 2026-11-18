@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useSyncExternalStore } from "react";
+import { useSyncExternalStore } from "react";
 import { useTranslations } from "next-intl";
 import {
     ArrowLeft,
@@ -11,9 +11,9 @@ import {
     Loader2,
     PenLine,
     RotateCcw,
+    Smartphone,
     Sparkles,
-    Tag,
-    X,
+    ThumbsUp,
 } from "lucide-react";
 import Stars from "@/components/ui/stars";
 import { LANGUAGES } from "@/components/language-switcher";
@@ -26,9 +26,10 @@ import {
 } from "@/lib/ai/draft-options";
 import { cn } from "@/lib/cn";
 import {
+    androidVersionName,
+    authorOf,
     hueFor,
     initialsFor,
-    isLiveReview,
     isReplied,
     reviewTime,
     useRelativeTime,
@@ -38,12 +39,10 @@ import {
 export interface Draft {
     ai: string;
     text: string;
-    rating: number;
     tone: DraftTone;
     language: DraftLanguage;
 }
 
-const MAX_PHRASES = 8;
 const LANGUAGE_LABEL = Object.fromEntries(LANGUAGES.map((l) => [l.code, l.label])) as Record<string, string>;
 
 const noopSubscribe = () => () => {};
@@ -80,68 +79,12 @@ function CounterRing({ value, max }: { value: number; max: number }) {
     );
 }
 
-function KeyPhrases({ phrases, onChange }: { phrases: string[]; onChange: (next: string[]) => void }) {
-    const t = useTranslations("Dashboard");
-    const [input, setInput] = useState("");
-
-    const add = () => {
-        const value = input.trim().replace(/,$/, "").slice(0, 40);
-        if (value && !phrases.includes(value) && phrases.length < MAX_PHRASES) {
-            onChange([...phrases, value]);
-        }
-        setInput("");
-    };
-
-    return (
-        <div className="flex min-h-9 flex-wrap items-center gap-1.5 rounded-xl bg-surface px-2 py-1.5 ring-1 ring-line focus-within:ring-accent">
-            <Tag className="ml-1 size-3.5 shrink-0 text-ink-3" aria-hidden="true" />
-            {phrases.map((phrase) => (
-                <span
-                    key={phrase}
-                    className="inline-flex items-center gap-1 rounded-lg bg-accent-soft py-0.5 pl-2 pr-0.5 font-mono text-[11.5px] text-accent"
-                >
-                    {phrase}
-                    <button
-                        type="button"
-                        onClick={() => onChange(phrases.filter((p) => p !== phrase))}
-                        aria-label={t("removePhrase", { phrase })}
-                        className="grid size-5 place-items-center rounded-md transition-colors hover:bg-accent/15"
-                    >
-                        <X className="size-3" />
-                    </button>
-                </span>
-            ))}
-            {phrases.length < MAX_PHRASES && (
-                <input
-                    type="text"
-                    value={input}
-                    onChange={(e) => setInput(e.target.value)}
-                    onKeyDown={(e) => {
-                        if (e.key === "Enter" || e.key === ",") {
-                            e.preventDefault();
-                            add();
-                        } else if (e.key === "Backspace" && !input && phrases.length) {
-                            onChange(phrases.slice(0, -1));
-                        }
-                    }}
-                    onBlur={add}
-                    placeholder={phrases.length ? "" : t("addPhrase")}
-                    aria-label={t("addPhrase")}
-                    maxLength={40}
-                    className="min-w-24 flex-1 bg-transparent px-1 py-0.5 text-[12.5px] text-ink outline-none"
-                />
-            )}
-        </div>
-    );
-}
-
 interface ReviewDetailProps {
     review: ReviewItem;
     draft: Draft;
     detectedLanguage: DraftLanguage | null;
     onDraftChange: (patch: Partial<Draft>) => void;
-    keywords: string[];
-    onKeywordsChange: (next: string[]) => void;
+    isDemo: boolean;
     generating: boolean;
     publishing: boolean;
     publishedText: string | null;
@@ -158,8 +101,7 @@ export default function ReviewDetail({
     draft,
     detectedLanguage,
     onDraftChange,
-    keywords,
-    onKeywordsChange,
+    isDemo,
     generating,
     publishing,
     publishedText,
@@ -179,6 +121,12 @@ export default function ReviewDetail({
     const over = length > REPLY_CHAR_LIMIT;
     const canPublish = draft.text.trim().length > 0 && !over && !publishing && !generating;
     const hasText = draft.text.length > 0;
+    const author = authorOf(review, t("anonymousReviewer"));
+    const technical = [
+        review.app_version_name && t("versionLabel", { version: review.app_version_name }),
+        review.device,
+        androidVersionName(review.android_os_version),
+    ].filter(Boolean) as string[];
 
     return (
         <article className="mx-auto w-full max-w-[46rem] px-4 pb-16 pt-4 sm:px-8 sm:pt-8">
@@ -195,13 +143,13 @@ export default function ReviewDetail({
             <header className="flex items-start gap-3.5">
                 <span
                     className="avatar size-11 text-[14px]"
-                    style={{ "--h": hueFor(review.author_name) } as React.CSSProperties}
+                    style={{ "--h": hueFor(author) } as React.CSSProperties}
                 >
-                    {initialsFor(review.author_name)}
+                    {initialsFor(author)}
                 </span>
                 <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
-                        <h2 className="text-[17px] font-semibold tracking-tight">{review.author_name}</h2>
+                        <h2 className="text-[17px] font-semibold tracking-tight">{author}</h2>
                         <span
                             className={cn(
                                 "rounded-full px-2 py-px text-[11px] font-medium",
@@ -212,11 +160,11 @@ export default function ReviewDetail({
                         </span>
                     </div>
                     <div className="mt-1 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[12.5px] text-ink-3">
-                        <Stars value={review.rating} size={13} />
+                        <Stars value={review.star_rating} size={13} />
                         <span>{relative(reviewTime(review))}</span>
                         <span aria-hidden="true">·</span>
                         <span className="font-mono text-[11px] uppercase tracking-wide">
-                            {isLiveReview(review) ? t("sourceLive") : t("sourceDemo")}
+                            {isDemo ? t("sourceDemo") : t("sourcePlay")}
                         </span>
                         {detectedLanguage && (
                             <>
@@ -231,9 +179,26 @@ export default function ReviewDetail({
                 </div>
             </header>
 
-            <blockquote className="mt-6 font-display text-[23px] leading-[1.32] tracking-[-0.01em] text-ink sm:text-[27px]">
-                {review.comment ? `“${review.comment}”` : <span className="text-ink-3">{t("noComment")}</span>}
+            <blockquote className="mt-6 whitespace-pre-line font-display text-[23px] leading-[1.32] tracking-[-0.01em] text-ink sm:text-[27px]">
+                {review.review_text ? `“${review.review_text}”` : <span className="text-ink-3">{t("noComment")}</span>}
             </blockquote>
+
+            {(technical.length > 0 || review.thumbs_up_count > 0) && (
+                <p className="mt-4 flex flex-wrap items-center gap-1.5 text-[12px] text-ink-3">
+                    {technical.length > 0 && (
+                        <span className="inline-flex items-center gap-1.5 rounded-lg bg-subtle px-2 py-1 ring-1 ring-line">
+                            <Smartphone className="size-3.5" aria-hidden="true" />
+                            {technical.join(" · ")}
+                        </span>
+                    )}
+                    {review.thumbs_up_count > 0 && (
+                        <span className="inline-flex items-center gap-1.5 rounded-lg bg-subtle px-2 py-1 ring-1 ring-line">
+                            <ThumbsUp className="size-3.5" aria-hidden="true" />
+                            {t("helpfulCount", { count: review.thumbs_up_count })}
+                        </span>
+                    )}
+                </p>
+            )}
 
             {/* Published state */}
             {publishedText !== null ? (
@@ -265,10 +230,17 @@ export default function ReviewDetail({
             ) : (
                 <section className="mt-8" aria-label={t("yourReply")}>
                     {isReplied(review) && (
-                        <p className="mb-4 flex items-center gap-2 rounded-xl bg-ok-soft px-3.5 py-2.5 text-[13px] text-ok">
-                            <Check className="size-4 shrink-0" />
-                            {t("repliedNote")}
-                        </p>
+                        <div className="mb-4 rounded-xl bg-ok-soft px-3.5 py-2.5 text-[13px] text-ok">
+                            <p className="flex items-center gap-2 font-medium">
+                                <Check className="size-4 shrink-0" />
+                                {t("repliedNote")}
+                            </p>
+                            {review.developer_reply_text && (
+                                <p className="mt-2 border-l-2 border-ok/40 pl-3 text-[13.5px] leading-relaxed text-ink-2">
+                                    {review.developer_reply_text}
+                                </p>
+                            )}
+                        </div>
                     )}
 
                     {/* Controls */}
@@ -326,16 +298,6 @@ export default function ReviewDetail({
                         </div>
                     </div>
 
-                    <div className="mt-3">
-                        <p className="eyebrow mb-1.5">
-                            {t("keyPhrases")}
-                            <span className="ml-2 font-sans text-[11px] normal-case tracking-normal text-ink-3/80">
-                                {t("keyPhrasesHint")}
-                            </span>
-                        </p>
-                        <KeyPhrases phrases={keywords} onChange={onKeywordsChange} />
-                    </div>
-
                     {/* Editor */}
                     <div className="ai-border mt-5 rounded-2xl" data-active={generating}>
                         <div className="overflow-hidden rounded-2xl bg-surface shadow-card ring-1 ring-line">
@@ -383,29 +345,6 @@ export default function ReviewDetail({
                                 <p className="px-5 pb-2 text-[12.5px] font-medium text-bad" role="alert">
                                     {t("overLimit", { count: length - REPLY_CHAR_LIMIT })}
                                 </p>
-                            )}
-
-                            {draft.ai && !generating && (
-                                <div className="flex flex-wrap items-center gap-2 border-t border-line px-5 py-2.5 text-[12.5px] text-ink-3">
-                                    {t("rateDraft")}
-                                    <div role="radiogroup" aria-label={t("rateDraft")} className="flex">
-                                        {[1, 2, 3, 4, 5].map((value) => (
-                                            <button
-                                                key={value}
-                                                type="button"
-                                                role="radio"
-                                                aria-checked={draft.rating === value}
-                                                aria-label={t("rateValue", { value })}
-                                                onClick={() => onDraftChange({ rating: value })}
-                                                className="grid size-7 place-items-center rounded-md transition-transform hover:scale-110"
-                                            >
-                                                <svg viewBox="0 0 20 20" className={cn("size-4", value <= draft.rating ? "fill-star" : "fill-line-strong")}>
-                                                    <path d="M10 1.6l2.47 5.18 5.68.7-4.18 3.9 1.07 5.62L10 14.24 4.96 17l1.07-5.62L1.85 7.48l5.68-.7L10 1.6z" />
-                                                </svg>
-                                            </button>
-                                        ))}
-                                    </div>
-                                </div>
                             )}
 
                             <div className="flex flex-wrap items-center gap-2 border-t border-line bg-subtle/60 px-3 py-2.5 sm:px-4">

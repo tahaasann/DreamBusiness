@@ -5,37 +5,35 @@ import Link from "next/link";
 import { initializePaddle, type Paddle } from "@paddle/paddle-js";
 import { useLocale, useTranslations } from "next-intl";
 import { ChevronDown, Loader2, LogOut, Plus, Sparkles } from "lucide-react";
-import { generateAiDraft } from "@/app/actions/generate-draft";
-import { publishReplyAndLog } from "@/app/actions/publish-reply";
-import { createDemoLocationForUser } from "@/app/actions/google-business";
+import { generatePlayDraft } from "@/app/actions/play-draft";
+import { publishPlayReply, syncPlayAppNow } from "@/app/actions/play";
+import { createDemoPlayApp } from "@/app/actions/play-apps";
 import { LogoMark } from "@/components/brand/logo";
 import ThemeSwitcher from "@/components/theme-switcher";
 import LanguageSwitcher from "@/components/language-switcher";
 import Sidebar, { AppAvatar, PlanCard } from "@/components/dashboard/sidebar";
-import ReviewList, { type Filter, type Sort } from "@/components/dashboard/review-list";
+import ReviewList, { NO_FACETS, type Facets, type Filter, type Sort } from "@/components/dashboard/review-list";
 import ReviewDetail, { type Draft } from "@/components/dashboard/review-detail";
+import ConnectPlayDialog, { type ConnectMode } from "@/components/dashboard/connect-play-dialog";
 import { Toaster, useToasts } from "@/components/dashboard/toaster";
 import {
     isReplied,
     reviewTime,
     type AppItem,
+    type CredentialItem,
     type ReviewItem,
 } from "@/components/dashboard/helpers";
-import { detectReviewLanguage } from "@/lib/ai/detect-language";
-import {
-    isDraftLanguage,
-    isDraftTone,
-    REPLY_CHAR_LIMIT,
-    type DraftLanguage,
-} from "@/lib/ai/draft-options";
+import { defaultReplyLanguage } from "@/lib/ai/play-prompt";
+import { isDraftTone, REPLY_CHAR_LIMIT } from "@/lib/ai/draft-options";
 import { cn } from "@/lib/cn";
 
 interface DashboardClientProps {
     userId: string;
     userEmail: string;
     isPro: boolean;
-    initialLocations: AppItem[];
+    initialApps: AppItem[];
     initialReviews: ReviewItem[];
+    initialCredentials: CredentialItem[];
 }
 
 async function celebrate() {
@@ -56,26 +54,28 @@ export default function DashboardClientView({
     userId,
     userEmail,
     isPro,
-    initialLocations,
+    initialApps,
     initialReviews,
+    initialCredentials,
 }: DashboardClientProps) {
     const t = useTranslations("Dashboard");
     const locale = useLocale();
-    const uiLanguage: DraftLanguage = isDraftLanguage(locale) ? locale : "en-US";
-
-    const [apps, setApps] = useState<AppItem[]>(initialLocations);
+    const [apps, setApps] = useState<AppItem[]>(initialApps);
     const [reviews, setReviews] = useState<ReviewItem[]>(initialReviews);
-    const [activeAppId, setActiveAppId] = useState<string | null>(initialLocations[0]?.id ?? null);
+    const [credentials, setCredentials] = useState<CredentialItem[]>(initialCredentials);
+    const [activeAppId, setActiveAppId] = useState<string | null>(initialApps[0]?.id ?? null);
     const [selectedId, setSelectedId] = useState<string | null>(null);
     const [mobilePane, setMobilePane] = useState<"list" | "detail">("list");
     const [query, setQuery] = useState("");
     const [filter, setFilter] = useState<Filter>("all");
     const [sort, setSort] = useState<Sort>("newest");
-    const [keywords, setKeywords] = useState<string[]>([]);
+    const [facets, setFacets] = useState<Facets>(NO_FACETS);
     const [drafts, setDrafts] = useState<Record<string, Draft>>({});
     const [published, setPublished] = useState<Record<string, string>>({});
     const [busy, setBusy] = useState<{ kind: "draft" | "publish"; id: string } | null>(null);
     const [addingDemo, setAddingDemo] = useState(false);
+    const [syncingAppId, setSyncingAppId] = useState<string | null>(null);
+    const [dialog, setDialog] = useState<{ open: boolean; mode: ConnectMode }>({ open: false, mode: "connect" });
     const [accountOpen, setAccountOpen] = useState(false);
     const [paddle, setPaddle] = useState<Paddle | null>(null);
     const { toasts, push, dismiss } = useToasts();
@@ -112,13 +112,13 @@ export default function DashboardClientView({
     const pendingByApp = useMemo(() => {
         const map: Record<string, number> = {};
         for (const review of reviews) {
-            if (!isReplied(review)) map[review.location_id] = (map[review.location_id] ?? 0) + 1;
+            if (!isReplied(review)) map[review.app_id] = (map[review.app_id] ?? 0) + 1;
         }
         return map;
     }, [reviews]);
 
     const appReviews = useMemo(
-        () => reviews.filter((review) => review.location_id === activeApp?.id),
+        () => reviews.filter((review) => review.app_id === activeApp?.id),
         [reviews, activeApp?.id],
     );
 
@@ -132,8 +132,24 @@ export default function DashboardClientView({
     );
 
     const averageRating = appReviews.length
-        ? appReviews.reduce((sum, r) => sum + r.rating, 0) / appReviews.length
+        ? appReviews.reduce((sum, r) => sum + r.star_rating, 0) / appReviews.length
         : null;
+
+    // Facet options come from the reviews actually present for this app.
+    const languageOf = (review: ReviewItem) => review.reviewer_language?.split(/[-_]/)[0]?.toLowerCase() ?? "";
+    const languageOptions = useMemo(() => {
+        const names = new Intl.DisplayNames([locale], { type: "language" });
+        return [...new Set(appReviews.map(languageOf).filter(Boolean))]
+            .map((code) => ({ value: code, label: names.of(code) ?? code }))
+            .sort((a, b) => a.label.localeCompare(b.label, locale));
+    }, [appReviews, locale]);
+    const versionOptions = useMemo(
+        () =>
+            [...new Set(appReviews.map((r) => r.app_version_name).filter((v): v is string => Boolean(v)))].sort((a, b) =>
+                b.localeCompare(a, undefined, { numeric: true }),
+            ),
+        [appReviews],
+    );
 
     const visibleReviews = useMemo(() => {
         const needle = query.trim().toLocaleLowerCase();
@@ -141,25 +157,28 @@ export default function DashboardClientView({
             .filter((review) => {
                 if (filter === "pending" && isReplied(review)) return false;
                 if (filter === "replied" && !isReplied(review)) return false;
+                if (facets.stars !== "all" && review.star_rating !== Number(facets.stars)) return false;
+                if (facets.language !== "all" && languageOf(review) !== facets.language) return false;
+                if (facets.version !== "all" && review.app_version_name !== facets.version) return false;
                 if (!needle) return true;
                 return (
-                    review.author_name.toLocaleLowerCase().includes(needle) ||
-                    (review.comment ?? "").toLocaleLowerCase().includes(needle)
+                    (review.author_name ?? "").toLocaleLowerCase().includes(needle) ||
+                    (review.review_text ?? "").toLocaleLowerCase().includes(needle)
                 );
             })
             .sort((a, b) =>
-                sort === "lowest" && a.rating !== b.rating
-                    ? a.rating - b.rating
+                sort === "lowest" && a.star_rating !== b.star_rating
+                    ? a.star_rating - b.star_rating
                     : reviewTime(b).localeCompare(reviewTime(a)),
             );
-    }, [appReviews, filter, query, sort]);
+    }, [appReviews, facets, filter, query, sort]);
 
     const selectedReview =
         appReviews.find((review) => review.id === selectedId) ?? visibleReviews[0] ?? null;
 
     const languageGuess = useMemo(
-        () => (selectedReview ? detectReviewLanguage(selectedReview.comment, uiLanguage) : null),
-        [selectedReview, uiLanguage],
+        () => (selectedReview ? defaultReplyLanguage(selectedReview.reviewer_language, selectedReview.review_text) : null),
+        [selectedReview],
     );
 
     const appTone = activeApp?.default_tone;
@@ -168,11 +187,10 @@ export default function DashboardClientView({
             drafts[review.id] ?? {
                 ai: "",
                 text: "",
-                rating: 5,
                 tone: isDraftTone(appTone) ? appTone : "professional",
-                language: detectReviewLanguage(review.comment, uiLanguage).language,
+                language: defaultReplyLanguage(review.reviewer_language, review.review_text).language,
             },
-        [drafts, appTone, uiLanguage],
+        [drafts, appTone],
     );
 
     const updateDraft = useCallback(
@@ -191,6 +209,7 @@ export default function DashboardClientView({
     const selectApp = (id: string) => {
         setActiveAppId(id);
         setSelectedId(null);
+        setFacets(NO_FACETS);
         setMobilePane("list");
         setAccountOpen(false);
     };
@@ -230,39 +249,52 @@ export default function DashboardClientView({
         : undefined;
 
     // ── Actions ────────────────────────────────────────────────────────────
+    const showApp = (app: AppItem, appReviewsList: ReviewItem[]) => {
+        setApps((list) => (list.some((a) => a.id === app.id) ? list.map((a) => (a.id === app.id ? app : a)) : [...list, app]));
+        setReviews((list) => [...list.filter((r) => r.app_id !== app.id), ...appReviewsList]);
+        setActiveAppId(app.id);
+        setSelectedId(null);
+        setFacets(NO_FACETS);
+        setMobilePane("list");
+    };
+
     const handleAddDemo = async () => {
         setAddingDemo(true);
-        const result = await createDemoLocationForUser();
-        if (result.success && result.location) {
-            const app = result.location as AppItem;
-            const newReviews = (result.reviews as unknown as ReviewItem[]) ?? [];
-            setApps((list) => (list.some((a) => a.id === app.id) ? list : [...list, app]));
-            setReviews((list) => {
-                const seen = new Set(list.map((r) => r.id));
-                return [...list, ...newReviews.filter((r) => !seen.has(r.id))];
-            });
-            setActiveAppId(app.id);
-            setSelectedId(null);
-            setMobilePane("list");
-            push("success", t("demoAdded", { name: app.business_name }));
+        const result = await createDemoPlayApp();
+        if (result.success) {
+            showApp(result.app, result.reviews);
+            push("success", t("demoAdded", { name: result.app.display_name }));
         } else {
-            push("error", result.error ?? t("draftFailed"));
+            push("error", result.error);
         }
         setAddingDemo(false);
         setAccountOpen(false);
     };
 
+    const openConnect = () => {
+        setAccountOpen(false);
+        setDialog({ open: true, mode: credentials.length ? "add" : "connect" });
+    };
+
+    const handleSync = async (app: AppItem) => {
+        setSyncingAppId(app.id);
+        const result = await syncPlayAppNow(app.id);
+        if (result.success) {
+            if (result.app) showApp(result.app, result.reviews);
+            push("success", t("syncDone", { count: result.fetched }));
+        } else {
+            if (result.app) setApps((list) => list.map((a) => (a.id === app.id ? (result.app as AppItem) : a)));
+            push("error", result.error);
+        }
+        setSyncingAppId(null);
+    };
+
     const handleGenerate = async (review: ReviewItem) => {
         const draft = draftFor(review);
         setBusy({ kind: "draft", id: review.id });
-        const result = await generateAiDraft({
-            reviewId: review.id,
-            tone: draft.tone,
-            language: draft.language,
-            targetKeywords: keywords,
-        });
-        if (result.success && result.draft) {
-            updateDraft(review, { ai: result.draft, text: result.draft, rating: 5 });
+        const result = await generatePlayDraft({ reviewId: review.id, tone: draft.tone, language: draft.language });
+        if (result.success) {
+            updateDraft(review, { ai: result.draft, text: result.draft, language: result.language, tone: result.tone });
         } else {
             push("error", result.error ?? t("draftFailed"));
         }
@@ -275,24 +307,26 @@ export default function DashboardClientView({
         if (!text || text.length > REPLY_CHAR_LIMIT) return;
 
         setBusy({ kind: "publish", id: review.id });
-        const result = await publishReplyAndLog({
+        const result = await publishPlayReply({
             reviewId: review.id,
-            selectedTone: draft.tone,
-            aiGeneratedDraft: draft.ai,
-            finalPublishedText: text,
-            userRating: draft.rating,
+            replyText: text,
+            aiDraft: draft.ai.trim() || text,
+            tone: draft.tone,
+            language: draft.language,
         });
 
         if (result.success) {
-            const wasLastPending = !isReplied(review) && (pendingByApp[review.location_id] ?? 0) === 1;
-            setReviews((list) => list.map((r) => (r.id === review.id ? { ...r, status: "replied" } : r)));
+            const wasLastPending = !isReplied(review) && (pendingByApp[review.app_id] ?? 0) === 1;
+            setReviews((list) =>
+                list.map((r) => (r.id === review.id ? { ...r, status: "replied", developer_reply_text: text } : r)),
+            );
             setPublished((map) => ({ ...map, [review.id]: text }));
             setDrafts((all) => {
                 const rest = { ...all };
                 delete rest[review.id];
                 return rest;
             });
-            const base = result.publishedTo === "google" ? t("publishedLive") : t("publishedDemo");
+            const base = result.publishedTo === "google_play" ? t("publishedLive") : t("publishedDemo");
             push("success", result.warning ? `${base} ${result.warning}` : base);
             if (wasLastPending) void celebrate();
         } else {
@@ -313,6 +347,9 @@ export default function DashboardClientView({
                 onSelectApp={selectApp}
                 onAddDemo={handleAddDemo}
                 addingDemo={addingDemo}
+                credentials={credentials}
+                onConnect={openConnect}
+                onManageConnection={() => setDialog({ open: true, mode: "manage" })}
                 isPro={isPro}
                 onUpgrade={handleUpgrade}
                 userEmail={userEmail}
@@ -335,7 +372,7 @@ export default function DashboardClientView({
                             >
                                 {apps.map((app) => (
                                     <option key={app.id} value={app.id}>
-                                        {app.business_name}
+                                        {app.display_name}
                                         {pendingByApp[app.id] ? ` (${pendingByApp[app.id]})` : ""}
                                     </option>
                                 ))}
@@ -372,13 +409,29 @@ export default function DashboardClientView({
                             <div className="animate-pop fixed right-3 top-[3.75rem] z-50 w-[min(20rem,calc(100vw-1.5rem))] space-y-3 rounded-2xl bg-surface p-3 shadow-float ring-1 ring-line">
                                 <p className="truncate px-1 text-[13px] text-ink-2">{userEmail}</p>
                                 <PlanCard isPro={isPro} onUpgrade={handleUpgrade} />
+                                <button type="button" onClick={openConnect} className="btn btn-accent w-full">
+                                    <Plus className="size-4" />
+                                    {credentials.length ? t("addApp") : t("connectPlay")}
+                                </button>
+                                {credentials.length > 0 && (
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            setAccountOpen(false);
+                                            setDialog({ open: true, mode: "manage" });
+                                        }}
+                                        className="btn btn-ghost w-full justify-start text-[13px]"
+                                    >
+                                        {t("manageConnection")}
+                                    </button>
+                                )}
                                 <button
                                     type="button"
                                     onClick={handleAddDemo}
                                     disabled={addingDemo}
                                     className="btn btn-secondary w-full"
                                 >
-                                    {addingDemo ? <Loader2 className="size-4 animate-spin" /> : <Plus className="size-4" />}
+                                    {addingDemo ? <Loader2 className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
                                     {addingDemo ? t("addingDemoApp") : t("addDemoApp")}
                                 </button>
                                 <LanguageSwitcher variant="full" />
@@ -402,32 +455,28 @@ export default function DashboardClientView({
                             </h1>
                             <p className="mt-4 text-[15.5px] leading-relaxed text-ink-2">{t("welcomeBody")}</p>
                             <div className="mt-8 flex flex-col items-stretch justify-center gap-3 sm:flex-row sm:items-center">
+                                <button type="button" onClick={openConnect} className="btn btn-lg btn-accent">
+                                    <Plus className="size-4" />
+                                    {credentials.length ? t("addApp") : t("connectPlay")}
+                                </button>
                                 <button
                                     type="button"
                                     onClick={handleAddDemo}
                                     disabled={addingDemo}
-                                    className="btn btn-lg btn-accent"
+                                    className="btn btn-lg btn-secondary"
                                 >
                                     {addingDemo ? <Loader2 className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
-                                    {addingDemo ? t("addingDemoApp") : t("addDemoApp")}
+                                    {addingDemo ? t("addingDemoApp") : t("tryDemo")}
                                 </button>
-                                <span
-                                    aria-disabled="true"
-                                    className="btn btn-lg btn-secondary pointer-events-none opacity-60"
-                                >
-                                    {t("connectPlay")}
-                                    <span className="rounded-full bg-line px-1.5 py-px text-[11px] text-ink-3">
-                                        {t("comingSoon")}
-                                    </span>
-                                </span>
                             </div>
+                            <p className="mt-5 text-[12.5px] text-ink-3">{t("connectHint")}</p>
                         </div>
                     </main>
                 ) : (
                     <main className="flex min-h-0 flex-1">
                         <ReviewList
                             ref={searchRef}
-                            appName={activeApp.business_name}
+                            appName={activeApp.display_name}
                             reviews={visibleReviews}
                             counts={counts}
                             averageRating={averageRating}
@@ -439,6 +488,18 @@ export default function DashboardClientView({
                             onFilterChange={setFilter}
                             sort={sort}
                             onSortChange={setSort}
+                            facets={facets}
+                            onFacetsChange={setFacets}
+                            languageOptions={languageOptions}
+                            versionOptions={versionOptions}
+                            sync={{
+                                isDemo: activeApp.is_demo,
+                                connected: Boolean(activeApp.credential_id),
+                                lastSyncedAt: activeApp.last_synced_at,
+                                error: activeApp.last_sync_error,
+                                syncing: syncingAppId === activeApp.id,
+                                onSync: () => handleSync(activeApp),
+                            }}
                             className={cn(
                                 "w-full md:w-[22rem] md:shrink-0 xl:w-[24rem]",
                                 mobilePane === "detail" && "hidden md:flex",
@@ -457,10 +518,11 @@ export default function DashboardClientView({
                                     key={selectedReview.id}
                                     review={selectedReview}
                                     draft={draftFor(selectedReview)}
-                                    detectedLanguage={languageGuess?.detected ? languageGuess.language : null}
+                                    detectedLanguage={
+                                        languageGuess && languageGuess.source !== "fallback" ? languageGuess.language : null
+                                    }
                                     onDraftChange={(patch) => updateDraft(selectedReview, patch)}
-                                    keywords={keywords}
-                                    onKeywordsChange={setKeywords}
+                                    isDemo={activeApp.is_demo}
                                     generating={busy?.kind === "draft" && busy.id === selectedReview.id}
                                     publishing={busy?.kind === "publish" && busy.id === selectedReview.id}
                                     publishedText={published[selectedReview.id] ?? null}
@@ -482,7 +544,7 @@ export default function DashboardClientView({
                             ) : (
                                 <div className="flex h-full items-center justify-center p-10 text-center text-[14px] text-ink-3">
                                     <div>
-                                        <AppAvatar name={activeApp.business_name} className="mx-auto size-12 rounded-2xl text-[15px]" />
+                                        <AppAvatar name={activeApp.display_name} className="mx-auto size-12 rounded-2xl text-[15px]" />
                                         <p className="mt-4 max-w-xs">{t("selectReview")}</p>
                                     </div>
                                 </div>
@@ -491,6 +553,30 @@ export default function DashboardClientView({
                     </main>
                 )}
             </div>
+
+            <ConnectPlayDialog
+                open={dialog.open}
+                mode={dialog.mode}
+                credential={credentials[0] ?? null}
+                onClose={() => setDialog((d) => ({ ...d, open: false }))}
+                onCredentialSaved={(credential) =>
+                    setCredentials((list) => [credential, ...list.filter((c) => c.id !== credential.id)])
+                }
+                onAppAdded={(app, appReviewsList, note) => {
+                    showApp(app, appReviewsList);
+                    push(note ? "info" : "success", note ?? t("appAdded", { name: app.display_name }));
+                }}
+                onDisconnected={(credentialId, removedAppIds) => {
+                    setCredentials((list) => list.filter((c) => c.id !== credentialId));
+                    setApps((list) =>
+                        list
+                            .filter((a) => !removedAppIds.includes(a.id))
+                            .map((a) => (a.credential_id === credentialId ? { ...a, credential_id: null } : a)),
+                    );
+                    setReviews((list) => list.filter((r) => !removedAppIds.includes(r.app_id)));
+                    push("success", t("disconnected"));
+                }}
+            />
 
             <Toaster toasts={toasts} onDismiss={dismiss} />
         </div>
