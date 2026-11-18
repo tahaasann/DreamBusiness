@@ -21,7 +21,8 @@ Betikler 02–05, sunucunun `SUPABASE_SECRET_KEY` ile çalışmasını varsayar
 
 ## `migrations/` — bundan sonraki değişiklikler
 
-`06_export_schema.sql` çıktısı `migrations/` altına başlangıç (baseline) migration'ı
-olarak kaydedilir. Ondan sonraki her şema değişikliği yeni, tarihli bir migration
+`06_export_schema.sql` çıktısı `migrations/20261118000000_baseline.sql` olarak
+kaydedildi (canlıya uygulanmaz; yeni ortam kurarken ilk adımdır).
+`20261118000100_hardening.sql` canlıya SQL Editor'dan uygulanır. Ondan sonraki her şema değişikliği yeni, tarihli bir migration
 dosyasıyla yapılır; Dashboard'dan elle tablo değiştirilmez. Böylece yeni bir ortam
 (staging, yerel) aynı şemayla kurulabilir ve RLS kuralları kod incelemesinden geçer.
